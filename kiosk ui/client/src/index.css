@@ -1,0 +1,161 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Outfit:wght@400;500;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+
+    /* Bright Yellow #FFD600 */
+    --primary: 50 100% 50%;
+    --primary-foreground: 0 0% 0%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 0%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 0%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+
+    --accent: 0 0% 90%;
+    --accent-foreground: 0 0% 0%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 50 100% 50%;
+
+    --radius: 1.5rem; /* Large rounded corners for kiosk feel */
+
+    --font-sans: 'DM Sans', sans-serif;
+    --font-display: 'Outfit', sans-serif;
+  }
+
+  /* Strict Kiosk Mode Styles */
+  * {
+    @apply border-border;
+    user-select: none; /* Disable text selection globally */
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
+  }
+
+  html, body, #root {
+    @apply h-full w-full m-0 p-0 overflow-hidden;
+  }
+
+  #root {
+    @apply flex flex-col;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+    /* Hide scrollbars completely */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  body::-webkit-scrollbar {
+    display: none;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    @apply tracking-tight;
+  }
+}
+
+@layer utilities {
+  .touch-target {
+    @apply min-h-[60px] min-w-[60px];
+  }
+
+  .touch-target-small {
+    @apply min-h-[48px] min-w-[48px];
+  }
+  
+  .glass-card {
+    @apply bg-white/90 backdrop-blur-xl border border-white/20 shadow-2xl;
+  }
+
+  .kiosk-shadow {
+    box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1), 0 10px 20px -5px rgba(0,0,0,0.05);
+  }
+}
+
+/* Touch-friendly scrollable area for job list */
+.touch-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
+.touch-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.touch-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.touch-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.15);
+  border-radius: 3px;
+}
+
+.touch-scroll::-webkit-scrollbar-thumb:active {
+  background: rgba(0,0,0,0.3);
+}
+
+/* Premium keypad button */
+.keypad-btn {
+  background: white;
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 8px rgba(0,0,0,0.04);
+  transition: all 0.15s ease;
+}
+
+.keypad-btn:active {
+  box-shadow: 0 0px 1px rgba(0,0,0,0.06);
+  transform: scale(0.95);
+}
+
+.keypad-btn-action {
+  background: hsl(0 0% 96%);
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.keypad-btn-action:active {
+  background: hsl(0 0% 92%);
+  transform: scale(0.95);
+}
+
+/* Global touch scrolling fix for kiosk touchscreen */
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.15);
+  border-radius: 3px;
+}

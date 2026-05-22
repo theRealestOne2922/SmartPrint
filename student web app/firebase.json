@@ -1,0 +1,32 @@
+{
+    "hosting": {
+        "target": "main",
+        "public": "dist/public",
+        "ignore": [
+            "firebase.json",
+            "**/.*",
+            "**/node_modules/**"
+        ],
+        "rewrites": [
+            {
+                "source": "/kiosk-app/**",
+                "destination": "/kiosk-app/index.html"
+            },
+            {
+                "source": "**",
+                "destination": "/index.html"
+            }
+        ],
+        "headers": [
+            {
+                "source": "**/*.@(html)",
+                "headers": [
+                    {
+                        "key": "Cache-Control",
+                        "value": "no-cache, no-store, must-revalidate"
+                    }
+                ]
+            }
+        ]
+    }
+}

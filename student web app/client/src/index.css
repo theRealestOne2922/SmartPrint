@@ -1,0 +1,91 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 9%;
+    
+    /* #FFD600 - Brand Yellow */
+    --primary: 50 100% 50%; 
+    --primary-foreground: 0 0% 0%;
+    
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+    
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 45%;
+    
+    --accent: 50 100% 50%;
+    --accent-foreground: 0 0% 0%;
+    
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 50 100% 50%;
+    
+    --radius: 1.5rem;
+    
+    --font-sans: 'Plus Jakarta Sans', sans-serif;
+    --font-display: 'Outfit', sans-serif;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary selection:text-primary-foreground;
+    font-family: var(--font-sans);
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    @apply tracking-tight;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .shadow-soft {
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+  }
+  .shadow-glow {
+    box-shadow: 0 0 20px rgba(255, 214, 0, 0.4);
+  }
+  .hover-elevate {
+    @apply transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-soft;
+  }
+  .active-press {
+    @apply transition-transform duration-100 ease-in active:scale-95;
+  }
+}
+
+/* Custom scrollbar for a cleaner look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}

@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "smartprintvit-kiosk",
+    "public": "dist/public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/kiosk-app/**",
+        "destination": "/kiosk-app/index.html"
+      }
+    ]
+  }
+}

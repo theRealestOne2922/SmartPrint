@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "smartprintvit"
+  },
+  "targets": {
+    "smartprintvit": {
+      "hosting": {
+        "main": [
+          "smartprintvit"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

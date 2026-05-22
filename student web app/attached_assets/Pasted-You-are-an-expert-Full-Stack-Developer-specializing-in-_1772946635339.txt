@@ -1,0 +1,260 @@
+You are an expert **Full-Stack Developer specializing in Next.js, Supabase, and modern product UI design**.
+
+I am building a **Smart Print Kiosk system** for a university campus.
+
+The kiosk UI is already built and runs on a Raspberry Pi.
+Students interact with the kiosk using a **6-digit Print ID** to retrieve their uploaded documents and complete payment.
+
+Your task is to build the **Student Web Application** that allows students to upload documents and generate this Print ID.
+
+The system must integrate with the existing backend stack.
+
+---
+
+# EXISTING TECH STACK
+
+Frontend
+Next.js
+React
+TypeScript
+Tailwind CSS
+
+Backend
+Supabase
+
+Services used in Supabase:
+
+PostgreSQL (database)
+Supabase Storage (for PDF files)
+Supabase Realtime
+
+Payment
+Razorpay (handled at the kiosk)
+
+---
+
+# PURPOSE OF THE STUDENT WEB APP
+
+Students use this app to:
+
+Upload their document before going to the kiosk.
+
+The system then generates a **unique 6-digit Print ID** that the student enters at the kiosk.
+
+The kiosk then retrieves the document and handles payment.
+
+---
+
+# STUDENT WEB APP FEATURES
+
+## 1. Landing Page
+
+A clean landing screen explaining the process:
+
+Step 1
+Upload your document
+
+Step 2
+Receive your Print ID
+
+Step 3
+Go to the Smart Print Kiosk
+
+Step 4
+Enter your Print ID and pay
+
+Design should match kiosk branding:
+
+Primary color
+Yellow (#FFD600)
+
+Accent colors
+Black and White
+
+---
+
+# 2. Upload Document Page
+
+Students should be able to upload a document.
+
+Upload restrictions:
+
+Only PDF files allowed
+
+Max file size
+20MB
+
+Max pages
+100 pages
+
+Use a **drag and drop upload component**.
+
+Show upload progress.
+
+---
+
+# 3. Print Settings
+
+After uploading the file, allow the student to configure:
+
+Color Mode
+
+Black & White
+Color
+
+Copies
+
+1–10 copies
+
+Show a **live price calculation**.
+
+Example:
+
+Black & White
+₹2 per page
+
+Color
+₹10 per page
+
+---
+
+# 4. Generate Print Job
+
+When the student clicks:
+
+Generate Print ID
+
+The backend should:
+
+1. Generate a random **6-digit job ID**
+2. Store the job in Supabase
+
+Table:
+
+print_jobs
+
+Columns:
+
+id
+job_id
+student_name
+file_name
+page_count
+color_mode
+copies
+price
+status
+created_at
+
+Status should start as:
+
+uploaded
+
+---
+
+# 5. Print ID Confirmation Screen
+
+Display a large screen showing:
+
+Your Print ID
+
+Example:
+
+482193
+
+Message:
+
+Go to the Smart Print Kiosk and enter this code to print your document.
+
+Also show:
+
+File name
+Pages
+Total cost
+
+---
+
+# 6. File Storage
+
+Uploaded PDFs should be stored in:
+
+Supabase Storage
+
+Bucket:
+
+print_documents
+
+The database should store the file path.
+
+---
+
+# 7. Security Rules
+
+Implement the following protections:
+
+Only allow PDF uploads
+
+File size max
+20MB
+
+Prevent duplicate uploads within 1 hour using file hash
+
+Rate limit uploads:
+
+5 uploads per user per hour
+
+---
+
+# 8. UI DESIGN REQUIREMENTS
+
+The student web app must look like a **real startup product**.
+
+Design style:
+
+Clean
+Minimal
+Mobile friendly
+
+Primary color
+Yellow (#FFD600)
+
+UI style:
+
+White cards
+Black text
+Yellow buttons
+
+Rounded buttons
+Soft shadows
+Smooth animations
+
+---
+
+# 9. RESPONSIVE DESIGN
+
+The web app must work on:
+
+Mobile phones
+Tablets
+Laptop browsers
+
+Students should be able to upload documents directly from their phones.
+
+---
+
+# 10. OUTPUT REQUIRED
+
+Generate:
+
+1. Complete Next.js project folder structure
+2. Supabase database schema
+3. File upload component
+4. Print settings component
+5. Job ID generation logic
+6. Supabase storage integration
+7. Drag-and-drop PDF uploader
+8. Confirmation screen showing the Print ID
+9. Tailwind UI components
+10. Error handling for invalid files
+
+The code must be **production-ready, clean, and TypeScript compatible**.
