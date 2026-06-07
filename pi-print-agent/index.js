@@ -1,5 +1,10 @@
+// ─── SmartPrint Pi Print Agent v4.0 — MongoDB Edition ───
+// Original Supabase version backed up in _supabase_backup/
+// Database: MongoDB (Mongoose) — replaces all supabase.from() calls
+// Realtime: MongoDB Change Streams — replaces Supabase Realtime
+// Storage: Supabase Storage KEPT for file cleanup (remove old files from bucket)
 import { createClient } from '@supabase/supabase-js';
-import WebSocket from 'ws';
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,8 +16,7 @@ import util from 'util';
 import https from 'https';
 import http from 'http';
 
-// Polyfill for Node.js
-global.WebSocket = WebSocket;
+import { PrintJob } from './models/PrintJob.js';
 
 const execAsync = util.promisify(exec);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,15 +24,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
-    console.error('Missing Supabase environment variables! Please check your .env file.');
+// ─── MongoDB Connection ───
+const mongoUri = process.env.MONGODB_URI;
+if (!mongoUri) {
+    console.error('Missing MONGODB_URI! Please check your .env file.');
     process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// ─── Supabase Client (STORAGE ONLY — for file cleanup) ───
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let supabase = null;
+if (supabaseUrl && supabaseServiceKey) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
+    console.log('✅ Supabase client initialized (STORAGE ONLY)');
+} else {
+    console.warn('⚠️  Supabase credentials missing — file cleanup will skip storage deletion');
+}
 
 // Extensions that need conversion to PDF before printing.
 // IPP Everywhere driver only accepts PDF — images and Office docs must be converted.
@@ -129,47 +141,50 @@ async function convertToPdf(inputPath) {
 const activeJobs = new Set();
 
 async function processJob(job) {
+    // Use MongoDB's _id as the unique key for dedup
+    const jobKey = String(job._id || job.id);
+
     // Guard against duplicate processing
-    if (activeJobs.has(job.id)) {
-        console.log(`[JOB ${job.job_id}] [FILE ${job.id}] ⚠️  Already in progress — skipping duplicate.`);
+    if (activeJobs.has(jobKey)) {
+        console.log(`[JOB ${job.jobId}] [FILE ${jobKey}] ⚠️  Already in progress — skipping duplicate.`);
         return;
     }
-    activeJobs.add(job.id);
+    activeJobs.add(jobKey);
 
     console.log(`\n-----------------------------------`);
-    console.log(`[JOB ${job.job_id}] Processing: "${job.file_name}"`);
+    console.log(`[JOB ${job.jobId}] Processing: "${job.fileName}"`);
 
-    const ext = path.extname(job.file_name || '').toLowerCase() || '.pdf';
-    const tempFilePath = path.join('/tmp', `smartprint_${job.job_id}_${Date.now()}${ext}`);
+    const ext = path.extname(job.fileName || '').toLowerCase() || '.pdf';
+    const tempFilePath = path.join('/tmp', `smartprint_${job.jobId}_${Date.now()}${ext}`);
     let printPath = tempFilePath;
 
     try {
         // 1. Download
-        console.log(`[JOB ${job.job_id}] Downloading (${ext})...`);
-        await downloadFile(job.file_path, tempFilePath);
+        console.log(`[JOB ${job.jobId}] Downloading (${ext})...`);
+        await downloadFile(job.filePath, tempFilePath);
         const dlStat = await fs.stat(tempFilePath);
-        console.log(`[JOB ${job.job_id}] Downloaded: ${(dlStat.size / 1024).toFixed(1)} KB`);
+        console.log(`[JOB ${job.jobId}] Downloaded: ${(dlStat.size / 1024).toFixed(1)} KB`);
 
         // 2. Convert to PDF if needed (Office docs + images)
         if (NEEDS_CONVERSION.has(ext)) {
             const isImage = ['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif'].includes(ext);
-            console.log(`[JOB ${job.job_id}] ${isImage ? 'Image' : 'Office doc'} — converting to PDF...`);
+            console.log(`[JOB ${job.jobId}] ${isImage ? 'Image' : 'Office doc'} — converting to PDF...`);
             printPath = await convertToPdf(tempFilePath);
         } else {
-            console.log(`[JOB ${job.job_id}] PDF — sending directly`);
+            console.log(`[JOB ${job.jobId}] PDF — sending directly`);
         }
 
         // 3. Print — simple, clean command. Just -n for copies.
         const copies = Math.max(1, parseInt(job.copies) || 1);
-        console.log(`[JOB ${job.job_id}] Copies: ${copies}, Color: ${job.color_mode}, Duplex: ${job.duplex}`);
+        console.log(`[JOB ${job.jobId}] Copies: ${copies}, Color: ${job.colorMode}, Duplex: ${job.duplex}`);
 
         // Paper size (default A4)
-        const paperSize = (job.paper_size || 'a4').toLowerCase();
+        const paperSize = (job.paperSize || 'a4').toLowerCase();
         let lpCommand; // Declared here so it's accessible after the if/else blocks
         
         // --- BOOKLET FORMATTING FOR A3 ---
         if (paperSize === 'a3') {
-            console.log(`[JOB ${job.job_id}] Formatting as A3 Booklet...`);
+            console.log(`[JOB ${job.jobId}] Formatting as A3 Booklet...`);
             try {
                 const pdfBytes = await fs.readFile(printPath);
                 const srcDoc = await PDFDocument.load(pdfBytes);
@@ -204,14 +219,11 @@ async function processJob(job) {
                         frontPage.drawPage(pageArray[rightFrontIdx], { x: a4Width, y: 0, width: a4Width, height: a4Height });
                     }
                     
-                    // Back side: Based on the printer's duplex feeding (which flips long-edge / sideways),
-                    // the physical left/right are swapped. We place Page 3 on the left and Page 2 on the right,
-                    // right-side up, to perfectly align when folded.
+                    // Back side
                     const backPage = outDoc.addPage([a4Width * 2, a4Height]);
                     
-                    // SWAPPED indices for the back page
-                    const leftBackIdx = paddedCount - 2 * s - 2; // e.g., Page 3
-                    const rightBackIdx = 2 * s + 1; // e.g., Page 2
+                    const leftBackIdx = paddedCount - 2 * s - 2;
+                    const rightBackIdx = 2 * s + 1;
                     
                     if (pageArray[leftBackIdx]) {
                         backPage.drawPage(pageArray[leftBackIdx], {
@@ -239,16 +251,16 @@ async function processJob(job) {
                 
                 // Build a clean lp command specifically for booklet printing
                 lpCommand = `lp -d SmartPrint -n ${copies} -o fit-to-page`;
-                if (job.color_mode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
+                if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
                 else lpCommand += ` -o print-color-mode=color`;
                 // Short-edge duplex for booklet: the spine is along the short edge.
                 lpCommand += ` -o media=a3 -o landscape -o sides=two-sided-short-edge`;
-                console.log(`[JOB ${job.job_id}] Booklet generation successful.`);
+                console.log(`[JOB ${job.jobId}] Booklet generation successful.`);
             } catch (err) {
-                console.error(`[JOB ${job.job_id}] Booklet generation failed:`, err);
+                console.error(`[JOB ${job.jobId}] Booklet generation failed:`, err);
                 // Fallback to normal a3
                 lpCommand = `lp -d SmartPrint -n ${copies}`;
-                if (job.color_mode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
+                if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
                 else lpCommand += ` -o print-color-mode=color`;
                 lpCommand += ` -o media=a3`;
                 if (job.orientation === 'landscape') lpCommand += ` -o landscape`;
@@ -257,7 +269,7 @@ async function processJob(job) {
             }
         } else {
             lpCommand = `lp -d SmartPrint -n ${copies}`;
-            if (job.color_mode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
+            if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
             else lpCommand += ` -o print-color-mode=color`;
             if (job.duplex) lpCommand += ` -o sides=two-sided-long-edge`;
             else lpCommand += ` -o sides=one-sided`;
@@ -265,92 +277,95 @@ async function processJob(job) {
             if (job.orientation === 'landscape') lpCommand += ` -o landscape`;
         }
 
-        if (job.page_range && job.page_range.toLowerCase() !== 'all') {
-            const sanitizedRange = job.page_range.replace(/[^0-9,\-]/g, '');
+        if (job.pageRange && job.pageRange.toLowerCase() !== 'all') {
+            const sanitizedRange = job.pageRange.replace(/[^0-9,\-]/g, '');
             if (sanitizedRange) lpCommand += ` -P ${sanitizedRange}`;
         }
         lpCommand += ` "${printPath}"`;
 
-        console.log(`[JOB ${job.job_id}] Printing: ${lpCommand}`);
+        console.log(`[JOB ${job.jobId}] Printing: ${lpCommand}`);
         const { stdout, stderr } = await execAsync(lpCommand);
         if (stderr) console.warn(`[PRINTER WARNING]: ${stderr}`);
-        console.log(`[JOB ${job.job_id}] Spooled: ${stdout.trim()}`);
+        console.log(`[JOB ${job.jobId}] Spooled: ${stdout.trim()}`);
 
         // Small delay to ensure CUPS spooling has completely finished reading the file
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // 4. Cleanup + mark completed
+        // 4. Cleanup + mark completed (MongoDB)
         try { await fs.unlink(tempFilePath); } catch {}
         if (printPath !== tempFilePath) {
             try { await fs.unlink(printPath); } catch {}
         }
 
-        await supabase.from('print_jobs').update({ status: 'completed' }).eq('id', job.id);
-        console.log(`[JOB ${job.job_id}] ✅ Completed: "${job.file_name}"`);
+        await PrintJob.updateOne({ _id: job._id }, { status: 'completed' });
+        console.log(`[JOB ${job.jobId}] ✅ Completed: "${job.fileName}"`);
 
     } catch (error) {
-        console.error(`[JOB ${job.job_id}] ❌ ERROR with "${job.file_name}":`, error.message);
+        console.error(`[JOB ${job.jobId}] ❌ ERROR with "${job.fileName}":`, error.message);
         try { await fs.unlink(tempFilePath); } catch {}
         if (printPath !== tempFilePath) {
             try { await fs.unlink(printPath); } catch {}
         }
-        await supabase.from('print_jobs').update({ status: 'failed' }).eq('id', job.id);
+        await PrintJob.updateOne({ _id: job._id }, { status: 'failed' });
     } finally {
-        activeJobs.delete(job.id);
+        activeJobs.delete(jobKey);
     }
 }
 
 async function catchUpMissedJobs() {
     console.log('[SYSTEM] Scanning for missed jobs...');
-    const { data: jobs, error } = await supabase
-        .from('print_jobs')
-        .select('*')
-        .eq('status', 'printing');
+    try {
+        const jobs = await PrintJob.find({ status: 'printing' }).lean();
 
-    if (error) {
-        console.error('[SYSTEM] Failed to fetch missed jobs:', error.message);
-        return;
-    }
-
-    if (jobs && jobs.length > 0) {
-        console.log(`[SYSTEM] Found ${jobs.length} missed jobs. Processing...`);
-        for (const job of jobs) {
-            await processJob(job);
+        if (jobs && jobs.length > 0) {
+            console.log(`[SYSTEM] Found ${jobs.length} missed jobs. Processing...`);
+            for (const job of jobs) {
+                await processJob(job);
+            }
+        } else {
+            console.log('[SYSTEM] No missed jobs. Queue is clean.');
         }
-    } else {
-        console.log('[SYSTEM] No missed jobs. Queue is clean.');
+    } catch (err) {
+        console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
     }
 }
 
-let activeChannel = null;
+// ─── MongoDB Change Stream listener (replaces Supabase Realtime) ───
+let changeStream = null;
 
 function startListener() {
-    if (activeChannel) {
-        supabase.removeChannel(activeChannel);
+    if (changeStream) {
+        changeStream.close();
     }
 
-    console.log('[SYSTEM] Connecting real-time listener...');
+    console.log('[SYSTEM] Starting MongoDB Change Stream listener...');
 
-    activeChannel = supabase
-        .channel('print_agent_v2')
-        .on('postgres_changes', {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'print_jobs'
-        }, (payload) => {
-            if (payload.new.status === 'printing' && payload.old.status !== 'printing') {
-                processJob(payload.new);
+    changeStream = PrintJob.watch(
+        [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
+        { fullDocument: 'updateLookup' }
+    );
+
+    changeStream.on('change', (change) => {
+        if (change.operationType === 'update' && change.fullDocument) {
+            const job = change.fullDocument;
+            if (job.status === 'printing') {
+                console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
+                processJob(job);
             }
-        })
-        .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                console.log('[SYSTEM] ✅ Connected & listening for new jobs!');
-                await catchUpMissedJobs();
-            } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-                console.error(`[SYSTEM] Listener dropped (${status}). Reconnecting in 5s...`);
-                setTimeout(startListener, 5000);
-            }
-        });
+        }
+    });
+
+    changeStream.on('error', (err) => {
+        console.error(`[SYSTEM] Change Stream error: ${err.message}. Reconnecting in 5s...`);
+        setTimeout(startListener, 5000);
+    });
+
+    changeStream.on('close', () => {
+        console.warn('[SYSTEM] Change Stream closed. Reconnecting in 5s...');
+        setTimeout(startListener, 5000);
+    });
+
+    console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
 }
 
 // ─── Automated Cleanup Routine ───
@@ -362,15 +377,12 @@ async function cleanupOldJobs() {
         console.log(`[CLEANUP] Running routine to delete files older than ${hoursToKeep} hours...`);
         
         // Calculate the cutoff date
-        const cutoffDate = new Date(Date.now() - hoursToKeep * 60 * 60 * 1000).toISOString();
+        const cutoffDate = new Date(Date.now() - hoursToKeep * 60 * 60 * 1000);
 
-        // Find old jobs
-        const { data: oldJobs, error: fetchError } = await supabase
-            .from('print_jobs')
-            .select('id, file_path')
-            .lt('created_at', cutoffDate);
-
-        if (fetchError) throw fetchError;
+        // Find old jobs (MongoDB)
+        const oldJobs = await PrintJob.find({ createdAt: { $lt: cutoffDate } })
+            .select('_id filePath')
+            .lean();
 
         if (!oldJobs || oldJobs.length === 0) {
             console.log(`[CLEANUP] No old jobs found. System is clean.`);
@@ -382,20 +394,19 @@ async function cleanupOldJobs() {
         let deletedCount = 0;
         for (const job of oldJobs) {
             try {
-                // Extract filename from the Supabase storage URL
-                if (job.file_path && job.file_path.includes('/storage/v1/object/public/pdfs/')) {
-                    const storagePath = job.file_path.split('/storage/v1/object/public/pdfs/')[1];
+                // Extract filename from the Supabase storage URL and delete from storage
+                if (supabase && job.filePath && job.filePath.includes('/storage/v1/object/public/pdfs/')) {
+                    const storagePath = job.filePath.split('/storage/v1/object/public/pdfs/')[1];
                     if (storagePath) {
-                        // Delete from storage bucket
                         await supabase.storage.from('pdfs').remove([storagePath]);
                     }
                 }
                 
-                // Delete from database
-                await supabase.from('print_jobs').delete().eq('id', job.id);
+                // Delete from MongoDB
+                await PrintJob.deleteOne({ _id: job._id });
                 deletedCount++;
             } catch (err) {
-                console.error(`[CLEANUP] Failed to delete job ${job.id}:`, err.message);
+                console.error(`[CLEANUP] Failed to delete job ${job._id}:`, err.message);
             }
         }
 
@@ -407,9 +418,18 @@ async function cleanupOldJobs() {
 
 // ─── Startup ───
 console.log('=============================================');
-console.log('   SMARTPRINT: PI PRINT AGENT v3.0');
-console.log('   Clean & simple — no GhostScript');
+console.log('   SMARTPRINT: PI PRINT AGENT v4.0');
+console.log('   MongoDB Edition — no GhostScript');
 console.log('=============================================');
+
+// Connect to MongoDB
+try {
+    await mongoose.connect(mongoUri);
+    console.log('✅ MongoDB connected');
+} catch (err) {
+    console.error('❌ MongoDB connection failed:', err.message);
+    process.exit(1);
+}
 
 // Check LibreOffice
 try {
@@ -440,12 +460,15 @@ cleanupOldJobs();
 // Schedule cleanup to run every 1 hour (3600000 ms)
 const cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
 
+// Start Change Stream listener + catch up missed jobs
 startListener();
+await catchUpMissedJobs();
 
 process.on('SIGINT', () => {
     console.log('Shutting down...');
     clearInterval(cleanupInterval);
-    if (activeChannel) supabase.removeChannel(activeChannel);
+    if (changeStream) changeStream.close();
+    mongoose.disconnect();
     process.exit(0);
 });
 

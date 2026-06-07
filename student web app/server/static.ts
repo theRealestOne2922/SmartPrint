@@ -12,7 +12,18 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
+  // Kiosk SPA: any /kiosk-app/* route that isn't a real file → kiosk index.html
+  app.use("/kiosk-app/{*path}", (_req, res) => {
+    const kioskIndex = path.resolve(distPath, "kiosk-app", "index.html");
+    if (fs.existsSync(kioskIndex)) {
+      res.sendFile(kioskIndex);
+    } else {
+      // Fallback to main index if kiosk build isn't present
+      res.sendFile(path.resolve(distPath, "index.html"));
+    }
+  });
+
+  // Student SPA: everything else → main index.html
   app.use("/{*path}", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));
   });

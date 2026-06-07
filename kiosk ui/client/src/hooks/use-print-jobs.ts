@@ -1,26 +1,26 @@
+// ─── Kiosk Print Job Hooks — MongoDB Edition ───
+// All Supabase database calls replaced with Express API fetch().
+// Mongoose returns camelCase fields, so the mapJob() function is simplified.
+// Original version backed up in _supabase_backup/
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
 
-// ============================================
-// SUPABASE HOOKS
-// ============================================
-
+// MongoDB/Mongoose already returns camelCase — no snake_case mapping needed
 function mapJob(d: any) {
   return {
-    id: d.id,
-    jobId: d.job_id,
-    studentName: d.student_name,
-    fileName: d.file_name,
-    filePath: d.file_path,
-    pageCount: d.page_count,
-    colorMode: d.color_mode,
+    id: d.id || d._id,
+    jobId: d.jobId,
+    studentName: d.studentName,
+    fileName: d.fileName,
+    filePath: d.filePath,
+    pageCount: d.pageCount,
+    colorMode: d.colorMode,
     copies: d.copies,
     duplex: d.duplex,
     orientation: d.orientation || 'portrait',
-    paperSize: d.paper_size || 'a3',
+    paperSize: d.paperSize || 'a3',
     price: d.price,
     status: d.status,
-    createdAt: d.created_at,
+    createdAt: d.createdAt,
   };
 }
 
@@ -30,17 +30,14 @@ export function usePrintJob(printId: string | null, pollInterval?: number) {
     queryFn: async () => {
       if (!printId) return null;
 
-      const { data, error } = await supabase
-        .from('print_jobs')
-        .select('*')
-        .eq('job_id', printId)
-        .order('id', { ascending: true });
-
-      if (error || !data || data.length === 0) {
+      // Fetch via Express API (was: supabase.from('print_jobs').select('*').eq('job_id', printId))
+      const res = await fetch(`/api/jobs/lookup/${printId}`);
+      if (!res.ok) {
         throw new Error("Job not found");
       }
 
-      return data.map(mapJob);
+      const data = await res.json();
+      return (Array.isArray(data) ? data : [data]).map(mapJob);
     },
     enabled: !!printId,
     refetchInterval: pollInterval || false,
@@ -53,17 +50,20 @@ export function useUpdatePrintJobStatus() {
 
   return useMutation({
     mutationFn: async ({ printId, status }: { printId: string; status: string }) => {
-      const { data, error } = await supabase
-        .from('print_jobs')
-        .update({ status })
-        .eq('job_id', printId)
-        .select();
+      // Update via Express API (was: supabase.from('print_jobs').update({ status }).eq('job_id', printId))
+      const res = await fetch(`/api/jobs/${printId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
 
-      if (error) {
-        throw new Error(error.message || 'Failed to update status');
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || 'Failed to update status');
       }
 
-      return data.map(mapJob);
+      const data = await res.json();
+      return (Array.isArray(data) ? data : [data]).map(mapJob);
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({
@@ -81,24 +81,19 @@ export function useUpdatePrintJobDetails() {
 
   return useMutation({
     mutationFn: async ({ id, jobId, updates }: { id: string; jobId: string; updates: { pageCount?: number; colorMode?: 'bw' | 'color'; copies?: number; duplex?: boolean; orientation?: 'portrait' | 'landscape'; paperSize?: 'a4' | 'a3' } }) => {
-      const dbUpdates: any = {};
-      if (updates.pageCount !== undefined) dbUpdates.page_count = updates.pageCount;
-      if (updates.colorMode !== undefined) dbUpdates.color_mode = updates.colorMode;
-      if (updates.copies !== undefined) dbUpdates.copies = updates.copies;
-      if (updates.duplex !== undefined) dbUpdates.duplex = updates.duplex;
-      if (updates.orientation !== undefined) dbUpdates.orientation = updates.orientation;
-      if (updates.paperSize !== undefined) dbUpdates.paper_size = updates.paperSize;
+      // Update via Express API (was: supabase.from('print_jobs').update(...).eq('id', id))
+      const res = await fetch(`/api/jobs/${id}/details`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
 
-      const { data, error } = await supabase
-        .from('print_jobs')
-        .update(dbUpdates)
-        .eq('id', id)
-        .select();
-
-      if (error) {
-        throw new Error(error.message || 'Failed to update job details');
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || 'Failed to update job details');
       }
-      return data;
+
+      return await res.json();
     },
     // Optimistic update: immediately update the cached data so the list doesn't re-order
     onMutate: async ({ id, jobId, updates }) => {
@@ -139,14 +134,16 @@ export function useDeletePrintJobItem() {
 
   return useMutation({
     mutationFn: async ({ id, jobId }: { id: string; jobId: string }) => {
-      const { error } = await supabase
-        .from('print_jobs')
-        .delete()
-        .eq('id', id);
+      // Delete via Express API (was: supabase.from('print_jobs').delete().eq('id', id))
+      const res = await fetch(`/api/jobs/${id}`, {
+        method: 'DELETE',
+      });
 
-      if (error) {
-        throw new Error(error.message || 'Failed to delete print job item');
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || 'Failed to delete print job item');
       }
+
       return { id };
     },
     onMutate: async ({ id, jobId }) => {

@@ -4,8 +4,6 @@ import { Keypad } from "@/components/Keypad";
 import { PageTransition } from "@/components/PageTransition";
 import { motion } from "framer-motion";
 
-import { supabase } from "@/lib/supabase";
-
 export function IdleScreen() {
   const [, setLocation] = useLocation();
   const [pin, setPin] = useState("");
@@ -33,39 +31,50 @@ export function IdleScreen() {
   useEffect(() => {
     if (pin.length === 6) {
       setChecking(true);
-      // Look up the job in Supabase
+      // Look up the job via Express API (was: supabase.from('print_jobs')...)
       const lookupJob = async () => {
-        const { data, error: fetchError } = await supabase
-          .from('print_jobs')
-          .select('*')
-          .eq('job_id', pin);
+        try {
+          const res = await fetch(`/api/jobs/lookup/${pin}`);
 
-        if (fetchError || !data || data.length === 0) {
-          setError("No print job found for this code.");
-          setChecking(false);
-          setTimeout(() => setPin(""), 600);
-          return;
-        }
-
-        // Just check the status of the first file in the batch
-        const firstJob = data[0];
-        if (firstJob.status !== 'payment_confirmed' && firstJob.status !== 'uploaded') {
-          if (firstJob.status === 'completed') {
-            setError("This job has already been printed.");
-          } else if (firstJob.status === 'printing') {
-            setError("This job is currently printing.");
-          } else {
-            setError("Payment not yet confirmed.");
+          if (!res.ok) {
+            setError("No print job found for this code.");
+            setChecking(false);
+            setTimeout(() => setPin(""), 600);
+            return;
           }
+
+          const data = await res.json();
+          if (!data || data.length === 0) {
+            setError("No print job found for this code.");
+            setChecking(false);
+            setTimeout(() => setPin(""), 600);
+            return;
+          }
+
+          // Just check the status of the first file in the batch
+          const firstJob = data[0];
+          if (firstJob.status !== 'payment_confirmed' && firstJob.status !== 'uploaded') {
+            if (firstJob.status === 'completed') {
+              setError("This job has already been printed.");
+            } else if (firstJob.status === 'printing') {
+              setError("This job is currently printing.");
+            } else {
+              setError("Payment not yet confirmed.");
+            }
+            setChecking(false);
+            setTimeout(() => setPin(""), 600);
+            return;
+          }
+
+          // Valid job → route to confirmation screen
+          setTimeout(() => {
+            setLocation(`/confirm/${pin}`);
+          }, 300);
+        } catch (err) {
+          setError("Failed to look up job. Please try again.");
           setChecking(false);
           setTimeout(() => setPin(""), 600);
-          return;
         }
-
-        // Valid job → route to confirmation screen
-        setTimeout(() => {
-          setLocation(`/confirm/${pin}`);
-        }, 300);
       };
 
       lookupJob();

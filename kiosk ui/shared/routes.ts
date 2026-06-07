@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { insertPrintJobSchema, printJobs } from './schema';
+import { insertPrintJobSchema } from './schema';
+import type { PrintJob } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -20,7 +21,7 @@ export const api = {
       method: 'GET' as const,
       path: '/api/print-jobs/:printId' as const,
       responses: {
-        200: z.custom<typeof printJobs.$inferSelect>(),
+        200: z.custom<PrintJob>(),
         404: errorSchemas.notFound,
       },
     },
@@ -29,7 +30,7 @@ export const api = {
       path: '/api/print-jobs' as const,
       input: insertPrintJobSchema,
       responses: {
-        201: z.custom<typeof printJobs.$inferSelect>(),
+        201: z.custom<PrintJob>(),
         400: errorSchemas.validation,
       },
     },
@@ -38,7 +39,7 @@ export const api = {
       path: '/api/print-jobs/:printId/status' as const,
       input: z.object({ status: z.string() }),
       responses: {
-        200: z.custom<typeof printJobs.$inferSelect>(),
+        200: z.custom<PrintJob>(),
         404: errorSchemas.notFound,
       },
     },

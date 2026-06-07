@@ -1,78 +1,103 @@
-import pg from 'pg';
-const { Client } = pg;
-const client = new Client({
-  connectionString: 'postgresql://postgres:bdHhJCfMXL05ekTT@db.mqqluwvemcuokqcchnii.supabase.co:5432/postgres'
-});
+// ─── MongoDB Migration/Seed Script ───
+// Replaces the old Drizzle/PostgreSQL migrate.js.
+// Creates indexes and seeds default data (admin, teacher, settings).
+// Original version backed up in _supabase_backup/
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+    console.error('❌ MONGODB_URI must be set in .env');
+    process.exit(1);
+}
 
 async function run() {
-  await client.connect();
-  
-  console.log('Adding teacherEmpId to print_jobs...');
-  await client.query(`ALTER TABLE "print_jobs" ADD COLUMN IF NOT EXISTS "teacher_emp_id" text;`);
-  
-  console.log('Creating teachers table...');
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS "teachers" (
-      "id" serial PRIMARY KEY,
-      "emp_id" varchar(20) NOT NULL UNIQUE,
-      "name" text NOT NULL,
-      "email" text NOT NULL,
-      "department" text,
-      "created_at" timestamp DEFAULT now() NOT NULL
+    console.log('Connecting to MongoDB...');
+    await mongoose.connect(MONGODB_URI);
+    console.log('✅ Connected to MongoDB');
+
+    const db = mongoose.connection.db;
+
+    // ─── Create Collections (if they don't exist) ───
+    const existingCollections = (await db.listCollections().toArray()).map(c => c.name);
+    
+    for (const name of ['printjobs', 'admins', 'teachers', 'systemsettings']) {
+        if (!existingCollections.includes(name)) {
+            await db.createCollection(name);
+            console.log(`  📦 Created collection: ${name}`);
+        }
+    }
+
+    // ─── Create Indexes ───
+    const printJobs = db.collection('printjobs');
+    await printJobs.createIndex({ jobId: 1 }, { unique: true });
+    await printJobs.createIndex({ status: 1 });
+    await printJobs.createIndex({ createdAt: 1 });
+    console.log('  📇 Created indexes on printjobs (jobId, status, createdAt)');
+
+    const admins = db.collection('admins');
+    await admins.createIndex({ username: 1 }, { unique: true });
+    console.log('  📇 Created index on admins (username)');
+
+    const teachers = db.collection('teachers');
+    await teachers.createIndex({ empId: 1 }, { unique: true });
+    console.log('  📇 Created index on teachers (empId)');
+
+    const settings = db.collection('systemsettings');
+    await settings.createIndex({ key: 1 }, { unique: true });
+    console.log('  📇 Created index on systemsettings (key)');
+
+    // ─── Seed Default Data ───
+    
+    // Admin
+    const adminResult = await admins.updateOne(
+        { username: 'vit admin' },
+        { $setOnInsert: { username: 'vit admin', passwordHash: 'admin123', createdAt: new Date(), updatedAt: new Date() } },
+        { upsert: true }
     );
-  `);
+    if (adminResult.upsertedCount) {
+        console.log('  👤 Seeded admin: vit admin / admin123');
+    } else {
+        console.log('  👤 Admin already exists — skipped');
+    }
 
-  console.log('Creating admins table...');
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS "admins" (
-      "id" serial PRIMARY KEY,
-      "username" varchar(50) NOT NULL UNIQUE,
-      "password_hash" text NOT NULL,
-      "created_at" timestamp DEFAULT now() NOT NULL
+    // Teacher
+    const teacherResult = await teachers.updateOne(
+        { empId: '1001' },
+        { $setOnInsert: { empId: '1001', name: 'Teacher Name', email: 'realme11421@gmail.com', department: 'CS', createdAt: new Date(), updatedAt: new Date() } },
+        { upsert: true }
     );
-  `);
+    if (teacherResult.upsertedCount) {
+        console.log('  🧑‍🏫 Seeded teacher: 1001 / Teacher Name');
+    } else {
+        console.log('  🧑‍🏫 Teacher already exists — skipped');
+    }
 
-  console.log('Creating system_settings table...');
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS "system_settings" (
-      "id" serial PRIMARY KEY,
-      "key" varchar(50) NOT NULL UNIQUE,
-      "value" text NOT NULL,
-      "updated_at" timestamp DEFAULT now() NOT NULL
-    );
-  `);
+    // Settings
+    for (const { key, value } of [
+        { key: 'jobExpirationHours', value: '24' },
+        { key: 'maxFilesLimit', value: '5' },
+    ]) {
+        const settingResult = await settings.updateOne(
+            { key },
+            { $setOnInsert: { key, value, createdAt: new Date(), updatedAt: new Date() } },
+            { upsert: true }
+        );
+        if (settingResult.upsertedCount) {
+            console.log(`  ⚙️  Seeded setting: ${key} = ${value}`);
+        } else {
+            console.log(`  ⚙️  Setting ${key} already exists — skipped`);
+        }
+    }
 
-  console.log('Done migrating schema!');
-  
-  console.log('Seeding data...');
-  // Insert admin (password: admin123)
-  await client.query(`
-    INSERT INTO "admins" ("username", "password_hash")
-    VALUES ('vit admin', 'admin123')
-    ON CONFLICT ("username") DO NOTHING;
-  `);
-
-  // Insert mock teacher
-  await client.query(`
-    INSERT INTO "teachers" ("emp_id", "name", "email", "department")
-    VALUES ('1001', 'Teacher Name', 'realme11421@gmail.com', 'CS')
-    ON CONFLICT ("emp_id") DO UPDATE SET email = 'realme11421@gmail.com';
-  `);
-
-  // Insert default settings
-  await client.query(`
-    INSERT INTO "system_settings" ("key", "value")
-    VALUES 
-      ('jobExpirationHours', '24'),
-      ('maxFilesLimit', '5')
-    ON CONFLICT ("key") DO NOTHING;
-  `);
-
-  console.log('Seeding done.');
-  await client.end();
+    console.log('\n✅ Migration complete!');
+    await mongoose.disconnect();
+    process.exit(0);
 }
 
 run().catch(err => {
-  console.error(err);
-  process.exit(1);
+    console.error('❌ Migration failed:', err);
+    process.exit(1);
 });

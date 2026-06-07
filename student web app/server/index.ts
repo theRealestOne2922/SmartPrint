@@ -4,6 +4,11 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { startOrphanCleanupScheduler } from "./cleanup";
+import { connectMongoDB } from "./mongodb";
+import { initWebSocket } from "./websocket";
+import { Admin } from "./models/Admin";
+import { Teacher } from "./models/Teacher";
+import { SystemSetting } from "./models/SystemSetting";
 
 const app = express();
 const httpServer = createServer(app);
@@ -61,9 +66,56 @@ app.use((req, res, next) => {
   next();
 });
 
+/**
+ * Seed default data on first run (admin, teacher, settings).
+ */
+async function seedDefaultData() {
+  try {
+    // Seed admin if none exists
+    const adminCount = await Admin.countDocuments();
+    if (adminCount === 0) {
+      await Admin.create({ username: 'vit admin', passwordHash: 'admin123' });
+      console.log('[seed] ✅ Created default admin user (vit admin / admin123)');
+    }
+
+    // Seed teacher if none exists
+    const teacherCount = await Teacher.countDocuments();
+    if (teacherCount === 0) {
+      await Teacher.create({
+        empId: '1001',
+        name: 'Teacher Name',
+        email: 'realme11421@gmail.com',
+        department: 'CS',
+      });
+      console.log('[seed] ✅ Created default teacher');
+    }
+
+    // Seed settings if none exist
+    const settingCount = await SystemSetting.countDocuments();
+    if (settingCount === 0) {
+      await SystemSetting.create([
+        { key: 'jobExpirationHours', value: '24' },
+        { key: 'maxFilesLimit', value: '5' },
+      ]);
+      console.log('[seed] ✅ Created default settings');
+    }
+  } catch (err: any) {
+    console.error('[seed] Error seeding default data:', err.message);
+  }
+}
+
 (async () => {
+  // Connect to MongoDB FIRST, before registering routes
+  await connectMongoDB();
+
+  // Seed default data on first run
+  await seedDefaultData();
+
   await registerRoutes(httpServer, app);
-  
+
+  // Initialize WebSocket relay for realtime updates (replaces Supabase Realtime)
+  initWebSocket(httpServer);
+
   // Start the background job to clean up orphan files in Supabase Storage.
   startOrphanCleanupScheduler();
 
@@ -95,7 +147,8 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(port, "127.0.0.1", () => {
-    log(`serving on port ${port}`);
+  const host = process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1";
+  httpServer.listen(port, host, () => {
+    log(`serving on ${host}:${port}`);
   });
 })();

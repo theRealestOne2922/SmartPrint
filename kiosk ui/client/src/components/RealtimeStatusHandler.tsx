@@ -1,37 +1,71 @@
+// ─── Realtime Status Handler — WebSocket Edition ───
+// Replaces Supabase Realtime (postgres_changes) with WebSocket connection.
+// Original version backed up in _supabase_backup/
 import { useEffect } from "react";
-import { useLocation } from "wouter";
-import { supabase } from "@/lib/supabase";
 import { useQueryClient } from "@tanstack/react-query";
 
 export function RealtimeStatusHandler() {
-  const [location] = useLocation();
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    console.log("Supabase Realtime started listening...");
-    
-    const channel = supabase
-      .channel('kiosk_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'print_jobs'
-        },
-        (payload) => {
-          const { new: job } = payload;
-          console.log(`Realtime update for job ${job.job_id}: ${job.status}`);
+    // Determine WebSocket URL based on current page location
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
 
-          // Only invalidate queries so the PrintingScreen can react via polling
-          // Do NOT auto-navigate — the user must enter their PIN first
-          queryClient.invalidateQueries({ queryKey: ['print-job', job.job_id] });
+    console.log("[WebSocket] Connecting to", wsUrl);
+
+    let ws: WebSocket;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_DELAY = 30000; // 30s max
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log("[WebSocket] Connected — listening for job updates");
+        reconnectAttempts = 0;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'JOB_UPDATE' && data.job) {
+            console.log(`[WebSocket] Job update: ${data.job.jobId} → ${data.job.status}`);
+
+            // Invalidate relevant React Query caches so components re-fetch
+            queryClient.invalidateQueries({ queryKey: ['print-job', data.job.jobId] });
+            queryClient.invalidateQueries({ queryKey: ['confirmed-jobs'] });
+          }
+        } catch (err) {
+          console.error("[WebSocket] Failed to parse message:", err);
         }
-      )
-      .subscribe();
+      };
+
+      ws.onclose = (event) => {
+        console.log(`[WebSocket] Disconnected (code: ${event.code}). Reconnecting...`);
+
+        // Exponential backoff reconnect
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+        reconnectAttempts++;
+
+        reconnectTimer = setTimeout(connect, delay);
+      };
+
+      ws.onerror = (err) => {
+        console.error("[WebSocket] Error:", err);
+        ws.close();
+      };
+    }
+
+    connect();
 
     return () => {
-      supabase.removeChannel(channel);
+      clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.close();
+      }
     };
   }, [queryClient]);
 

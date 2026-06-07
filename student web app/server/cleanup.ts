@@ -1,4 +1,9 @@
+// ─── Cleanup Scheduler — MongoDB Edition ───
+// Original Supabase version backed up in _supabase_backup/
+// Supabase client kept ONLY for Storage file deletion.
 import { supabase } from "./supabase";
+import { PrintJob } from "./models/PrintJob";
+import { SystemSetting } from "./models/SystemSetting";
 
 const BUCKET = "pdfs";
 
@@ -7,14 +12,9 @@ const BUCKET = "pdfs";
  */
 async function getRetentionHours(): Promise<number> {
   try {
-    const { data, error } = await supabase
-      .from("system_settings")
-      .select("value")
-      .eq("key", "jobExpirationHours")
-      .single();
-    
-    if (error || !data) return 24;
-    const hours = parseInt(data.value, 10);
+    const setting = await SystemSetting.findOne({ key: "jobExpirationHours" });
+    if (!setting) return 24;
+    const hours = parseInt(setting.value, 10);
     return isNaN(hours) ? 24 : hours;
   } catch (e) {
     return 24;
@@ -36,37 +36,26 @@ export async function cleanupExpiredJobs(): Promise<void> {
 
   try {
     // 1. Delete Expired Print Jobs & Their Files
-    const { data: expiredJobs, error: fetchErr } = await supabase
-      .from("print_jobs")
-      .select("id, file_path")
-      .lt("created_at", cutoffDate.toISOString());
+    const expiredJobs = await PrintJob.find({
+      createdAt: { $lt: cutoffDate },
+    }).select('_id filePath');
 
-    if (fetchErr) {
-      console.error(`${label} ❌ Failed to fetch expired jobs:`, fetchErr.message);
-    } else if (expiredJobs && expiredJobs.length > 0) {
+    if (expiredJobs && expiredJobs.length > 0) {
       // Extract storage paths from public URLs
       const pathsToDelete: string[] = [];
       for (const job of expiredJobs) {
-        if (!job.file_path) continue;
-        const urlParts = job.file_path.split("/");
+        if (!job.filePath) continue;
+        const urlParts = job.filePath.split("/");
         const fileName = urlParts[urlParts.length - 1];
         if (fileName) pathsToDelete.push(`uploads/${fileName}`);
       }
 
-      // Delete from DB
-      const jobIds = expiredJobs.map(j => j.id);
-      const { error: dbDeleteErr } = await supabase
-        .from("print_jobs")
-        .delete()
-        .in("id", jobIds);
+      // Delete from MongoDB
+      const jobIds = expiredJobs.map(j => j._id);
+      await PrintJob.deleteMany({ _id: { $in: jobIds } });
+      console.log(`${label} ✅ Deleted ${jobIds.length} expired job(s) from database.`);
 
-      if (dbDeleteErr) {
-        console.error(`${label} ❌ Failed to delete expired jobs from DB:`, dbDeleteErr.message);
-      } else {
-        console.log(`${label} ✅ Deleted ${jobIds.length} expired job(s) from database.`);
-      }
-
-      // Delete files from storage
+      // Delete files from Supabase Storage
       if (pathsToDelete.length > 0) {
         const { error: storageDeleteErr } = await supabase.storage
           .from(BUCKET)
@@ -84,10 +73,10 @@ export async function cleanupExpiredJobs(): Promise<void> {
 
     // 2. Standard Orphan Cleanup (files in storage with no DB record)
     const { data: storageFiles } = await supabase.storage.from(BUCKET).list("uploads", { limit: 1000 });
-    const { data: allJobs } = await supabase.from("print_jobs").select("file_path");
+    const allJobs = await PrintJob.find().select('filePath');
     
     if (storageFiles && allJobs) {
-      const referencedPaths = new Set(allJobs.map((j) => j.file_path).filter(Boolean));
+      const referencedPaths = new Set(allJobs.map((j) => j.filePath).filter(Boolean));
       const orphanPaths: string[] = [];
       const orphanCutoffMs = 3 * 60 * 60 * 1000; // 3 hours grace period for orphans
 

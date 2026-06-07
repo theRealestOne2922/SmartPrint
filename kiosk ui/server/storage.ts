@@ -1,11 +1,10 @@
-import { db } from "./db";
-import {
-  printJobs,
-  type CreatePrintJobRequest,
-  type UpdatePrintJobRequest,
-  type PrintJobResponse
+// ─── Kiosk Storage Layer — MongoDB Edition ───
+// Original Drizzle version backed up in _supabase_backup/
+import { PrintJob } from "./models/PrintJob";
+import type {
+  CreatePrintJobRequest,
+  PrintJobResponse
 } from "@shared/schema";
-import { eq } from "drizzle-orm";
 
 export interface IStorage {
   getPrintJobByJobId(jobId: string): Promise<PrintJobResponse | undefined>;
@@ -16,25 +15,27 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async getPrintJobByJobId(jobId: string): Promise<PrintJobResponse | undefined> {
-    const [job] = await db!.select().from(printJobs).where(eq(printJobs.jobId, jobId));
-    return job;
+    const job = await PrintJob.findOne({ jobId });
+    return job ? (job.toJSON() as unknown as PrintJobResponse) : undefined;
   }
 
   async createPrintJob(job: CreatePrintJobRequest): Promise<PrintJobResponse> {
-    const [newJob] = await db!.insert(printJobs).values(job).returning();
-    return newJob;
+    const newJob = await PrintJob.create(job);
+    return newJob.toJSON() as unknown as PrintJobResponse;
   }
 
   async updatePrintJobStatus(jobId: string, status: string): Promise<PrintJobResponse | undefined> {
-    const [updatedJob] = await db!.update(printJobs)
-      .set({ status })
-      .where(eq(printJobs.jobId, jobId))
-      .returning();
-    return updatedJob;
+    const updatedJob = await PrintJob.findOneAndUpdate(
+      { jobId },
+      { status },
+      { new: true }
+    );
+    return updatedJob ? (updatedJob.toJSON() as unknown as PrintJobResponse) : undefined;
   }
 
   async getPendingJobs(): Promise<PrintJobResponse[]> {
-    return await db!.select().from(printJobs).where(eq(printJobs.status, 'awaiting_payment'));
+    const jobs = await PrintJob.find({ status: 'awaiting_payment' });
+    return jobs.map(j => j.toJSON() as unknown as PrintJobResponse);
   }
 }
 
@@ -52,11 +53,16 @@ export class MemStorage implements IStorage {
   }
 
   async createPrintJob(job: CreatePrintJobRequest): Promise<PrintJobResponse> {
-    const id = this.currentId++;
+    const id = String(this.currentId++);
     const newJob: PrintJobResponse = {
       ...job,
       id,
       studentName: job.studentName || "Student",
+      teacherEmpId: null,
+      duplex: false,
+      orientation: 'portrait',
+      paperSize: 'a4',
+      pageRange: 'all',
       status: "uploaded",
       stripeSessionId: null,
       createdAt: new Date(),
@@ -79,4 +85,4 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = process.env.DATABASE_URL ? new DatabaseStorage() : new MemStorage();
+export const storage = process.env.MONGODB_URI ? new DatabaseStorage() : new MemStorage();

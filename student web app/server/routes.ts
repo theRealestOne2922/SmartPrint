@@ -1,20 +1,22 @@
+// ─── API Routes — MongoDB Edition ───
+// Original Supabase/Drizzle version backed up in _supabase_backup/
+// Supabase client is kept ONLY for Storage (file upload/download).
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { api } from "@shared/routes";
 import { z } from "zod";
 import multer from "multer";
 import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import rateLimit from "express-rate-limit";
-import { printJobs } from "@shared/schema";
-import { db } from "./db";
-import { eq, and, gt } from "drizzle-orm";
-import { supabase } from "./supabase";
 import express from "express";
 import officeCrypto from "officecrypto-tool";
+import { supabase } from "./supabase";
+import { PrintJob } from "./models/PrintJob";
+import { Admin } from "./models/Admin";
+import { SystemSetting } from "./models/SystemSetting";
 import { cleanupExpiredJobs } from "./cleanup";
+import { broadcastJobUpdate } from "./websocket";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // Ensure uploads dir exists
@@ -74,7 +76,10 @@ export async function registerRoutes(
   // Serve uploaded files directly
   app.use("/uploads", express.static(UPLOADS_DIR));
 
-  app.post(api.upload.path, uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
+  // ═══════════════════════════════════════════════════════════════
+  // FILE UPLOAD — Still uses Supabase Storage (not a database op)
+  // ═══════════════════════════════════════════════════════════════
+  app.post("/api/upload", uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
@@ -133,7 +138,9 @@ export async function registerRoutes(
     }
   });
 
-  // Decrypt password-protected Office files (DOCX, XLSX, PPTX, etc.)
+  // ═══════════════════════════════════════════════════════════════
+  // DECRYPT — No database involved, unchanged
+  // ═══════════════════════════════════════════════════════════════
   app.post("/api/decrypt", upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
@@ -174,31 +181,80 @@ export async function registerRoutes(
     }
   });
 
-  app.post(api.printJobs.create.path, async (req, res) => {
+  // ═══════════════════════════════════════════════════════════════
+  // PRINT JOBS — MongoDB
+  // ═══════════════════════════════════════════════════════════════
+
+  // Check Job ID uniqueness (must come BEFORE the :jobId param route)
+  app.get("/api/print-jobs/check-unique/:jobId", async (req, res) => {
     try {
-      const input = api.printJobs.create.input.parse(req.body);
+      const existing = await PrintJob.findOne({ jobId: req.params.jobId }).select('_id').lean();
+      res.json({ exists: !!existing });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
 
-      const pricePerPage = input.colorMode === "bw" ? 2 : 10;
-      const price = input.pageCount * input.copies * pricePerPage;
+  // List all print jobs (Admin Dashboard)
+  app.get("/api/print-jobs", async (req, res) => {
+    try {
+      const jobs = await PrintJob.find().sort({ createdAt: -1 }).lean();
+      res.json(jobs.map(j => ({ ...j, id: j._id })));
+    } catch (err: any) {
+      console.error("List print jobs error:", err);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
 
-      let jobId = generatePrintId();
-      while (await storage.getPrintJob(jobId)) {
+  // Create print job
+  app.post("/api/print-jobs", async (req, res) => {
+    try {
+      const {
+        jobId: providedJobId,
+        studentName,
+        teacherEmpId,
+        fileName,
+        filePath,
+        pageCount,
+        colorMode,
+        copies,
+        duplex,
+        orientation,
+        paperSize,
+        pageRange,
+        price: providedPrice,
+      } = req.body;
+
+      const pricePerPage = colorMode === "bw" ? 2 : 10;
+      const price = providedPrice || pageCount * copies * pricePerPage;
+
+      let jobId = providedJobId;
+      if (!jobId) {
         jobId = generatePrintId();
+        while (await PrintJob.findOne({ jobId })) {
+          jobId = generatePrintId();
+        }
       }
 
-      const job = await storage.createPrintJob({
+      const job = await PrintJob.create({
         jobId,
-        studentName: input.studentName || "Student",
-        fileName: input.fileName,
-        filePath: input.filePath,
-        pageCount: input.pageCount,
-        colorMode: input.colorMode,
-        copies: input.copies,
+        studentName: studentName || "Student",
+        teacherEmpId: teacherEmpId || null,
+        fileName,
+        filePath,
+        pageCount,
+        colorMode,
+        copies,
+        duplex: duplex || false,
+        orientation: orientation || 'portrait',
+        paperSize: paperSize || 'a4',
+        pageRange: pageRange || 'all',
         price,
+        status: 'uploaded',
       });
 
-      res.status(201).json(job);
-    } catch (err) {
+      res.status(201).json(job.toJSON());
+    } catch (err: any) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
           message: err.errors[0].message,
@@ -206,19 +262,28 @@ export async function registerRoutes(
         });
       }
       console.error("Create print job error:", err);
-      res.status(500).json({ message: "Internal server error" });
+      res.status(500).json({ message: err.message || "Internal server error" });
     }
   });
 
-  app.get(api.printJobs.get.path, async (req, res) => {
-    const job = await storage.getPrintJob(req.params.jobId);
-    if (!job) {
-      return res.status(404).json({ message: "Print job not found" });
+  // Get print job(s) by job ID
+  app.get("/api/print-jobs/:jobId", async (req, res) => {
+    try {
+      const jobs = await PrintJob.find({ jobId: req.params.jobId }).lean();
+      if (!jobs || jobs.length === 0) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      const mapped = jobs.map(j => ({ ...j, id: j._id }));
+      res.json(mapped.length === 1 ? mapped[0] : mapped);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
-    res.json(job);
   });
 
-  // Demo simulated payment route
+  // ═══════════════════════════════════════════════════════════════
+  // PAYMENT — MongoDB
+  // ═══════════════════════════════════════════════════════════════
+
   app.post("/api/jobs/:jobId/demo-pay", async (req, res) => {
     try {
       const jobId = req.params.jobId;
@@ -227,23 +292,53 @@ export async function registerRoutes(
         return res.status(400).json({ error: 'jobId is required' });
       }
 
-      // Save session id to supabase and set payment_confirmed
-      const { error: updateError } = await supabase
-        .from('print_jobs')
-        .update({ status: 'payment_confirmed' })
-        .eq('job_id', jobId);
+      const result = await PrintJob.updateMany(
+        { jobId },
+        { status: 'payment_confirmed' }
+      );
 
-      if (updateError) {
-        console.error('Failed to update status to Supabase:', updateError);
-        return res.status(500).json({ error: 'Failed to process order internally' });
+      if (result.modifiedCount === 0) {
+        return res.status(404).json({ error: 'Job not found or already confirmed' });
+      }
+
+      // Broadcast status change via WebSocket
+      const updatedJobs = await PrintJob.find({ jobId }).lean();
+      for (const job of updatedJobs) {
+        broadcastJobUpdate({ ...job, id: job._id });
       }
 
       console.log(`Demo pay for job ${jobId}`);
-      // In a real app this would verify payment status with a gateway
       return res.json({ success: true, message: 'Payment simulated successfully' });
     } catch (err) {
       console.error('Demo Pay Error:', err);
       return res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // ADMIN — MongoDB
+  // ═══════════════════════════════════════════════════════════════
+
+  app.post("/api/admin/login", async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required" });
+      }
+
+      const admin = await Admin.findOne({
+        username: username.trim(),
+        passwordHash: password,
+      });
+
+      if (!admin) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      res.json({ success: true, username: admin.username });
+    } catch (err: any) {
+      console.error("Admin login error:", err);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -257,12 +352,132 @@ export async function registerRoutes(
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // SETTINGS — MongoDB
+  // ═══════════════════════════════════════════════════════════════
+
   app.get("/api/settings", async (req, res) => {
     try {
-      const { data } = await supabase.from("system_settings").select("*");
-      res.json(data || []);
+      const settings = await SystemSetting.find().lean();
+      res.json(settings.map(s => ({ ...s, id: s._id })));
     } catch (err) {
       console.error("Settings Fetch Error:", err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  app.put("/api/admin/settings", async (req, res) => {
+    try {
+      const { settings } = req.body; // Array of { key, value }
+      if (!Array.isArray(settings)) {
+        return res.status(400).json({ message: "settings must be an array of { key, value }" });
+      }
+
+      for (const setting of settings) {
+        await SystemSetting.findOneAndUpdate(
+          { key: setting.key },
+          { key: setting.key, value: setting.value },
+          { upsert: true, new: true }
+        );
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Settings Update Error:", err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // KIOSK UI ROUTES — Served from the same Express server
+  // The kiosk frontend is embedded at /kiosk-app/ and makes
+  // API calls to these endpoints on the same origin.
+  // ═══════════════════════════════════════════════════════════════
+
+  // Lookup job(s) by PIN (kiosk IdleScreen + hooks)
+  app.get("/api/jobs/lookup/:printId", async (req, res) => {
+    try {
+      const { printId } = req.params;
+      const jobs = await PrintJob.find({ jobId: printId }).lean();
+      if (!jobs || jobs.length === 0) {
+        return res.status(404).json({ message: "No print job found for this code." });
+      }
+      res.json(jobs.map(j => ({ ...j, id: j._id })));
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Update job details (copies, color, orientation, etc.)
+  app.patch("/api/jobs/:id/details", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: any = {};
+      if (req.body.pageCount !== undefined) updates.pageCount = req.body.pageCount;
+      if (req.body.colorMode !== undefined) updates.colorMode = req.body.colorMode;
+      if (req.body.copies !== undefined) updates.copies = req.body.copies;
+      if (req.body.duplex !== undefined) updates.duplex = req.body.duplex;
+      if (req.body.orientation !== undefined) updates.orientation = req.body.orientation;
+      if (req.body.paperSize !== undefined) updates.paperSize = req.body.paperSize;
+
+      const job = await PrintJob.findByIdAndUpdate(id, updates, { new: true });
+      if (!job) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      res.json(job.toJSON());
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to update job details" });
+    }
+  });
+
+  // Delete a job item
+  app.delete("/api/jobs/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await PrintJob.findByIdAndDelete(id);
+      if (!result) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to delete print job" });
+    }
+  });
+
+  // Update job status by PIN (kiosk uses this for batch status updates)
+  app.patch("/api/jobs/:printId/status", async (req, res) => {
+    try {
+      const { printId } = req.params;
+      const { status } = req.body;
+
+      const result = await PrintJob.updateMany({ jobId: printId }, { status });
+      if (result.modifiedCount === 0) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+
+      const updatedJobs = await PrintJob.find({ jobId: printId }).lean();
+      const mapped = updatedJobs.map(j => ({ ...j, id: j._id }));
+
+      // Broadcast via WebSocket
+      for (const job of mapped) {
+        broadcastJobUpdate(job);
+      }
+
+      res.json(mapped);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to update status" });
+    }
+  });
+
+  // Fetch confirmed jobs (kiosk queue display)
+  app.get("/api/jobs/confirmed", async (req, res) => {
+    try {
+      const jobs = await PrintJob.find({ status: 'payment_confirmed' })
+        .sort({ createdAt: -1 })
+        .lean();
+      res.json(jobs.map(j => ({ ...j, id: j._id })));
+    } catch (err: any) {
+      console.error('Jobs fetch Error:', err);
       res.status(500).json({ error: 'Internal Server Error' });
     }
   });

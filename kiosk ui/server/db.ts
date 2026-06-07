@@ -1,14 +1,21 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import pg from "pg";
-import * as schema from "@shared/schema";
+// MongoDB connection for Kiosk UI
+import mongoose from 'mongoose';
 
-const { Pool } = pg;
-
-if (!process.env.DATABASE_URL) {
-  console.warn(
-    "DATABASE_URL must be set. Database features will not work without a provisioned database.",
-  );
+export async function connectMongoDB(): Promise<void> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    console.warn(
+      'MONGODB_URI not set. Database features will not work without it.',
+    );
+    return;
+  }
+  try {
+    await mongoose.connect(uri);
+    console.log('✅ MongoDB connected (Kiosk)');
+  } catch (err: any) {
+    console.error('❌ MongoDB connection error:', err.message);
+    process.exit(1);
+  }
 }
 
-export const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
-export const db = pool ? drizzle(pool, { schema }) : null;
+export { mongoose };

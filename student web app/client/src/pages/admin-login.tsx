@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
-import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -36,29 +35,31 @@ export default function AdminLogin() {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from("admins")
-        .select("*")
-        .eq("username", username.trim())
-        .eq("password_hash", password)
-        .maybeSingle();
+      // Authenticate via Express API (was: direct Supabase query on admins table)
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+        }),
+      });
 
-      if (error) {
-        toast({
-          title: "Login failed",
-          description: "An unexpected error occurred. Please try again.",
-          variant: "destructive",
-        });
-        setLoading(false);
-        return;
-      }
-
-      if (!data) {
-        toast({
-          title: "Invalid credentials",
-          description: "The username or password you entered is incorrect.",
-          variant: "destructive",
-        });
+      if (!res.ok) {
+        const err = await res.json();
+        if (res.status === 401) {
+          toast({
+            title: "Invalid credentials",
+            description: "The username or password you entered is incorrect.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Login failed",
+            description: err.message || "An unexpected error occurred. Please try again.",
+            variant: "destructive",
+          });
+        }
         setLoading(false);
         return;
       }

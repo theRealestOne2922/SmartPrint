@@ -1,3 +1,6 @@
+// ─── Supabase Client — STORAGE ONLY ───
+// Database queries now go through Express API → MongoDB.
+// This client is kept ONLY for Supabase Storage file uploads.
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mqqluwvemcuokqcchnii.supabase.co";

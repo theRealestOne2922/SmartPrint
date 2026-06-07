@@ -1,6 +1,9 @@
+// ─── Admin Dashboard — MongoDB Edition ───
+// All Supabase database calls replaced with Express API fetch().
+// Field names now use camelCase (from MongoDB/Mongoose) instead of snake_case (from Supabase REST).
+// Original version backed up in _supabase_backup/
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -34,27 +37,27 @@ export default function AdminDashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      // Fetch Jobs
-      const { data: printJobs } = await supabase
-        .from("print_jobs")
-        .select("*")
-        .order("created_at", { ascending: false });
+      // Fetch Jobs via Express API (was: supabase.from("print_jobs").select("*"))
+      const jobsRes = await fetch('/api/print-jobs');
+      if (jobsRes.ok) {
+        const printJobs = await jobsRes.json();
+        if (printJobs) setJobs(printJobs);
+      }
 
-      if (printJobs) setJobs(printJobs);
-
-      // Fetch Settings
-      const { data: settingsData } = await supabase
-        .from("system_settings")
-        .select("*");
-      if (settingsData) {
-        const expiration = settingsData.find(
-          (s: any) => s.key === "jobExpirationHours"
-        );
-        const limit = settingsData.find(
-          (s: any) => s.key === "maxFilesLimit"
-        );
-        if (expiration) setJobExpirationHours(expiration.value);
-        if (limit) setMaxFilesLimit(limit.value);
+      // Fetch Settings via Express API (was: supabase.from("system_settings").select("*"))
+      const settingsRes = await fetch('/api/settings');
+      if (settingsRes.ok) {
+        const settingsData = await settingsRes.json();
+        if (settingsData) {
+          const expiration = settingsData.find(
+            (s: any) => s.key === "jobExpirationHours"
+          );
+          const limit = settingsData.find(
+            (s: any) => s.key === "maxFilesLimit"
+          );
+          if (expiration) setJobExpirationHours(expiration.value);
+          if (limit) setMaxFilesLimit(limit.value);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -66,12 +69,11 @@ export default function AdminDashboard() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const { data: printJobs } = await supabase
-        .from("print_jobs")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (printJobs) setJobs(printJobs);
+      const jobsRes = await fetch('/api/print-jobs');
+      if (jobsRes.ok) {
+        const printJobs = await jobsRes.json();
+        if (printJobs) setJobs(printJobs);
+      }
       toast({ title: "Refreshed", description: "Print jobs list updated." });
     } catch (err) {
       console.error(err);
@@ -83,13 +85,17 @@ export default function AdminDashboard() {
   const saveSettings = async () => {
     setSavingSettings(true);
     try {
-      await supabase.from("system_settings").upsert(
-        [
-          { key: "jobExpirationHours", value: jobExpirationHours },
-          { key: "maxFilesLimit", value: maxFilesLimit },
-        ],
-        { onConflict: "key" }
-      );
+      // Update settings via Express API (was: supabase.from("system_settings").upsert(...))
+      await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: [
+            { key: "jobExpirationHours", value: jobExpirationHours },
+            { key: "maxFilesLimit", value: maxFilesLimit },
+          ]
+        }),
+      });
 
       // Actively trigger cleanup based on new retention settings
       await fetch("/api/admin/cleanup", { method: "POST" }).catch(console.error);
@@ -129,21 +135,22 @@ export default function AdminDashboard() {
     setLocation("/admin-login");
   };
 
-  // Group Jobs by job_id for visual batching
+  // Group Jobs by jobId for visual batching
+  // Note: field names are now camelCase (MongoDB) instead of snake_case (Supabase)
   const groupedJobs: { type: 'single' | 'batch', job?: any, jobs?: any[] }[] = [];
   const groups: Record<string, any[]> = {};
 
   const filteredJobs = jobs.filter(
     (job) =>
-      job.file_name?.toLowerCase().includes(search.toLowerCase()) ||
-      job.student_name?.toLowerCase().includes(search.toLowerCase()) ||
-      job.teacher_emp_id?.includes(search)
+      job.fileName?.toLowerCase().includes(search.toLowerCase()) ||
+      job.studentName?.toLowerCase().includes(search.toLowerCase()) ||
+      job.teacherEmpId?.includes(search)
   );
 
   filteredJobs.forEach(job => {
-    if (job.job_id) {
-      if (!groups[job.job_id]) groups[job.job_id] = [];
-      groups[job.job_id].push(job);
+    if (job.jobId) {
+      if (!groups[job.jobId]) groups[job.jobId] = [];
+      groups[job.jobId].push(job);
     } else {
       groupedJobs.push({ type: 'single', job });
     }
@@ -158,8 +165,8 @@ export default function AdminDashboard() {
   });
 
   groupedJobs.sort((a, b) => {
-    const timeA = new Date(a.type === 'single' ? a.job.created_at : a.jobs![0].created_at).getTime();
-    const timeB = new Date(b.type === 'single' ? b.job.created_at : b.jobs![0].created_at).getTime();
+    const timeA = new Date(a.type === 'single' ? a.job.createdAt : a.jobs![0].createdAt).getTime();
+    const timeB = new Date(b.type === 'single' ? b.job.createdAt : b.jobs![0].createdAt).getTime();
     return timeB - timeA;
   });
 
@@ -278,37 +285,37 @@ export default function AdminDashboard() {
                             const job = item.job;
                             return (
                               <tr
-                                key={job.id}
+                                key={job.id || job._id}
                                 className="hover:bg-zinc-50/50 transition-colors"
                               >
                                 <td className="px-4 py-3">
                                   <div className="font-semibold text-zinc-900">
-                                    {job.student_name || "—"}
+                                    {job.studentName || "—"}
                                   </div>
                                   <div className="text-xs text-zinc-500 mt-0.5">
-                                    ID: {job.teacher_emp_id || "N/A"}
+                                    ID: {job.teacherEmpId || "N/A"}
                                   </div>
                                 </td>
                                 <td className="px-4 py-3 font-mono text-xs text-zinc-700 max-w-[200px] truncate cursor-help">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <span className="truncate block">{job.file_name}</span>
+                                      <span className="truncate block">{job.fileName}</span>
                                     </TooltipTrigger>
                                     <TooltipContent className="max-w-xs font-mono text-[10px] break-all">
-                                      {job.file_name}
+                                      {job.fileName}
                                     </TooltipContent>
                                   </Tooltip>
                                 </td>
                                 <td className="px-4 py-3 text-zinc-700">
-                                  {job.page_count ?? "—"}
+                                  {job.pageCount ?? "—"}
                                 </td>
                                 <td className="px-4 py-3">
                                   <span className="text-xs text-zinc-700 capitalize">
-                                    {job.color_mode || "—"}
+                                    {job.colorMode || "—"}
                                   </span>
                                 </td>
                                 <td className="px-4 py-3 text-zinc-500 text-xs whitespace-nowrap">
-                                  {formatDate(job.created_at)}
+                                  {formatDate(job.createdAt)}
                                 </td>
                                 <td className="px-4 py-3">
                                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-black border border-primary/20">
@@ -320,22 +327,22 @@ export default function AdminDashboard() {
                           } else {
                             const batch = item.jobs!;
                             const firstJob = batch[0];
-                            const totalPages = batch.reduce((sum, j) => sum + (j.page_count || 0), 0);
-                            const fileNames = batch.map(j => j.file_name).join("\n");
-                            const colorModes = Array.from(new Set(batch.map(j => j.color_mode || "—")));
+                            const totalPages = batch.reduce((sum: number, j: any) => sum + (j.pageCount || 0), 0);
+                            const fileNames = batch.map((j: any) => j.fileName).join("\n");
+                            const colorModes = Array.from(new Set(batch.map((j: any) => j.colorMode || "—")));
                             const displayColor = colorModes.length === 1 ? colorModes[0] : "Mixed";
                             
                             return (
                               <tr
-                                key={firstJob.job_id}
+                                key={firstJob.jobId}
                                 className="hover:bg-zinc-50/50 transition-colors bg-zinc-100/30"
                               >
                                 <td className="px-4 py-3">
                                   <div className="font-semibold text-zinc-900">
-                                    {firstJob.student_name || "—"}
+                                    {firstJob.studentName || "—"}
                                   </div>
                                   <div className="text-xs text-zinc-500 mt-0.5">
-                                    ID: {firstJob.teacher_emp_id || "N/A"}
+                                    ID: {firstJob.teacherEmpId || "N/A"}
                                   </div>
                                 </td>
                                 <td className="px-4 py-3 font-mono text-xs text-zinc-700 max-w-[200px] truncate cursor-help">
@@ -360,7 +367,7 @@ export default function AdminDashboard() {
                                   </span>
                                 </td>
                                 <td className="px-4 py-3 text-zinc-500 text-xs whitespace-nowrap">
-                                  {formatDate(firstJob.created_at)}
+                                  {formatDate(firstJob.createdAt)}
                                 </td>
                                 <td className="px-4 py-3">
                                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-black border border-primary/20">

@@ -1,5 +1,9 @@
+// ─── Print Hooks — MongoDB Edition ───
+// Database queries now go through Express API instead of direct Supabase calls.
+// Supabase client is kept ONLY for Storage uploads.
+// Original version backed up in _supabase_backup/
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase"; // STORAGE ONLY
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 
@@ -102,7 +106,7 @@ export function useUploadFile() {
       const randomString = Math.random().toString(36).substring(2, 15);
       const storagePath = `uploads/${randomString}-${Date.now()}${fileExt}`;
 
-      // Upload to Supabase Storage
+      // Upload to Supabase Storage (STILL using Supabase for file storage)
       const { data, error } = await supabase.storage
         .from("pdfs")
         .upload(storagePath, file, {
@@ -140,8 +144,10 @@ export async function getUniqueJobId(): Promise<string> {
     if (++attempts > MAX_RETRIES) {
       throw new Error('Failed to generate a unique job ID after maximum retries.');
     }
-    const { data: existing } = await supabase.from('print_jobs').select('id').eq('job_id', jobId).limit(1);
-    if (existing && existing.length > 0) {
+    // Check uniqueness via Express API (was: direct Supabase query)
+    const res = await fetch(`/api/print-jobs/check-unique/${jobId}`);
+    const data = await res.json();
+    if (data.exists) {
       jobId = generatePrintId();
     } else {
       isUnique = true;
@@ -158,55 +164,38 @@ export function useCreatePrintJob() {
         jobId = await getUniqueJobId();
       }
 
-      // Try inserting with orientation column first, fallback without it
-      let job: any;
-      let error: any;
-
       const pricePerPage = data.colorMode === "bw" ? 2 : 10;
       const price = data.pageCount * data.copies * pricePerPage;
 
       const teacherEmpId = localStorage.getItem("teacherId");
-      
-      const baseRow = {
-        job_id: jobId,
-        student_name: localStorage.getItem("teacherName") || data.studentName || "Student",
-        teacher_emp_id: teacherEmpId || null,
-        file_name: data.fileName,
-        file_path: data.filePath,
-        page_count: data.pageCount,
-        color_mode: data.colorMode,
-        copies: data.copies,
-        duplex: data.duplex,
-        page_range: data.pageRange,
-        paper_size: data.paperSize || 'a4',
-        price: price,
-        status: 'uploaded',
-      };
 
-      // Try with orientation column
-      const result1 = await supabase
-        .from('print_jobs')
-        .insert({ ...baseRow, orientation: data.orientation || 'portrait' })
-        .select()
-        .single();
+      // Create job via Express API (was: direct Supabase insert)
+      const res = await fetch('/api/print-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId,
+          studentName: localStorage.getItem("teacherName") || data.studentName || "Student",
+          teacherEmpId: teacherEmpId || null,
+          fileName: data.fileName,
+          filePath: data.filePath,
+          pageCount: data.pageCount,
+          colorMode: data.colorMode,
+          copies: data.copies,
+          duplex: data.duplex,
+          orientation: data.orientation || 'portrait',
+          paperSize: data.paperSize || 'a4',
+          pageRange: data.pageRange,
+          price,
+        }),
+      });
 
-      if (result1.error && result1.error.message?.includes('orientation')) {
-        // Column doesn't exist yet, insert without it
-        const result2 = await supabase
-          .from('print_jobs')
-          .insert(baseRow)
-          .select()
-          .single();
-        job = result2.data;
-        error = result2.error;
-      } else {
-        job = result1.data;
-        error = result1.error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to create print job");
       }
 
-      if (error) {
-        throw new Error(error.message || "Failed to create print job");
-      }
+      const job = await res.json();
 
       // Send Email OTP via formsubmit.co API if it's a teacher
       if (teacherEmpId) {
@@ -220,8 +209,8 @@ export function useCreatePrintJob() {
               "Accept": "application/json"
             },
             body: JSON.stringify({
-              subject: `SmartPrint OTP: ${job.job_id}`,
-              message: `Your print job for "${job.file_name}" was successfully uploaded!\n\nYour 6-digit Print PIN is: ${job.job_id}\n\nPlease enter this PIN at the SmartPrint kiosk to print your document.`
+              subject: `SmartPrint OTP: ${job.jobId}`,
+              message: `Your print job for "${job.fileName}" was successfully uploaded!\n\nYour 6-digit Print PIN is: ${job.jobId}\n\nPlease enter this PIN at the SmartPrint kiosk to print your document.`
             })
           }).catch(console.error);
         } catch (e) {
@@ -229,23 +218,7 @@ export function useCreatePrintJob() {
         }
       }
 
-      return {
-        id: job.id,
-        jobId: job.job_id,
-        studentName: job.student_name,
-        fileName: job.file_name,
-        filePath: job.file_path,
-        pageCount: job.page_count,
-        colorMode: job.color_mode,
-        copies: job.copies,
-        duplex: job.duplex,
-        orientation: job.orientation || 'portrait',
-        paperSize: job.paper_size || 'a3',
-        pageRange: job.page_range,
-        price: job.price,
-        status: job.status,
-        createdAt: job.created_at,
-      };
+      return job;
     },
   });
 }
@@ -254,32 +227,15 @@ export function usePrintJob(jobId: string) {
   return useQuery({
     queryKey: ['print-job', jobId],
     queryFn: async (): Promise<PrintJobResponse[]> => {
-      const { data: jobs, error } = await supabase
-        .from('print_jobs')
-        .select('*')
-        .eq('job_id', jobId);
-
-      if (error) {
+      // Fetch via Express API (was: direct Supabase query)
+      const res = await fetch(`/api/print-jobs/${jobId}`);
+      if (!res.ok) {
         throw new Error("Job not found");
       }
 
-      return jobs.map(job => ({
-        id: job.id,
-        jobId: job.job_id,
-        studentName: job.student_name,
-        fileName: job.file_name,
-        filePath: job.file_path,
-        pageCount: job.page_count,
-        colorMode: job.color_mode,
-        copies: job.copies,
-        duplex: job.duplex,
-        orientation: job.orientation || 'portrait',
-        paperSize: job.paper_size || 'a3',
-        pageRange: job.page_range,
-        price: job.price,
-        status: job.status,
-        createdAt: job.created_at,
-      }));
+      const data = await res.json();
+      // API may return a single job or an array
+      return Array.isArray(data) ? data : [data];
     },
     enabled: !!jobId,
     retry: false,

@@ -1,0 +1,137 @@
+[
+  {
+    "timestamp": "2026-06-02T10:15:00.124Z",
+    "event_type": "websocket_trigger_received",
+    "job_id": "849201",
+    "file_name": "Assignment_Unit3.pdf",
+    "file_size_mb": 1.82,
+    "paper_size": "a4",
+    "color_mode": "bw",
+    "deduplication_status": "unique_file",
+    "trigger_latency_ms": 142,
+    "edge_node": "pi-print-agent-01"
+  },
+  {
+    "timestamp": "2026-06-02T10:15:02.950Z",
+    "event_type": "cups_spooler_dispatch",
+    "job_id": "849201",
+    "conversion_required": false,
+    "imposition_type": "none_a4_standard",
+    "spool_latency_ms": 320,
+    "printer_status": "processing"
+  },
+  {
+    "timestamp": "2026-06-02T10:18:33.410Z",
+    "event_type": "websocket_trigger_received",
+    "job_id": "637482",
+    "file_name": "EndSem_Question_Paper.docx",
+    "file_size_mb": 3.42,
+    "paper_size": "a3",
+    "color_mode": "bw",
+    "deduplication_status": "hash_match_found",
+    "trigger_latency_ms": 138,
+    "edge_node": "pi-print-agent-01"
+  },
+  {
+    "timestamp": "2026-06-02T10:18:41.560Z",
+    "event_type": "libreoffice_conversion_complete",
+    "job_id": "637482",
+    "source_format": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "output_format": "application/pdf",
+    "page_count_extracted": 8,
+    "status": "success",
+    "processing_time_ms": 8150,
+    "retry_count": 0
+  },
+  {
+    "timestamp": "2026-06-02T10:18:43.080Z",
+    "event_type": "booklet_imposition_complete",
+    "job_id": "637482",
+    "imposition_type": "saddle-stitch-a3",
+    "padded_page_count": 8,
+    "sheets_generated": 2,
+    "imposition_time_ms": 1520,
+    "status": "success"
+  },
+  {
+    "timestamp": "2026-06-02T10:18:43.560Z",
+    "event_type": "cups_spooler_dispatch",
+    "job_id": "637482",
+    "duplex_mode": "two-sided-short-edge",
+    "media": "a3",
+    "spool_latency_ms": 480,
+    "printer_status": "processing"
+  },
+  {
+    "timestamp": "2026-06-02T10:22:10.200Z",
+    "event_type": "websocket_trigger_received",
+    "job_id": "501938",
+    "file_name": "Confidential_MidTerm.pptx",
+    "file_size_mb": 5.10,
+    "paper_size": "a4",
+    "color_mode": "color",
+    "deduplication_status": "unique_file",
+    "encryption_detected": true,
+    "decryption_status": "success_aes256",
+    "trigger_latency_ms": 155,
+    "edge_node": "pi-print-agent-01"
+  },
+  {
+    "timestamp": "2026-06-02T10:22:22.350Z",
+    "event_type": "libreoffice_conversion_complete",
+    "job_id": "501938",
+    "source_format": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "output_format": "application/pdf",
+    "page_count_extracted": 15,
+    "status": "success",
+    "processing_time_ms": 12150,
+    "retry_count": 0
+  },
+  {
+    "timestamp": "2026-06-02T10:22:22.830Z",
+    "event_type": "cups_spooler_dispatch",
+    "job_id": "501938",
+    "imposition_type": "none_a4_standard",
+    "duplex_mode": "two-sided-long-edge",
+    "spool_latency_ms": 410,
+    "printer_status": "processing"
+  },
+  {
+    "timestamp": "2026-06-02T10:25:45.700Z",
+    "event_type": "websocket_trigger_received",
+    "job_id": "772310",
+    "file_name": "Lab_Diagram.png",
+    "file_size_mb": 2.15,
+    "paper_size": "a4",
+    "color_mode": "color",
+    "deduplication_status": "unique_file",
+    "trigger_latency_ms": 131,
+    "edge_node": "pi-print-agent-01"
+  },
+  {
+    "timestamp": "2026-06-02T10:25:52.900Z",
+    "event_type": "libreoffice_conversion_complete",
+    "job_id": "772310",
+    "source_format": "image/png",
+    "output_format": "application/pdf",
+    "status": "success",
+    "processing_time_ms": 7200,
+    "retry_count": 0
+  },
+  {
+    "timestamp": "2026-06-02T10:25:53.310Z",
+    "event_type": "cups_spooler_dispatch",
+    "job_id": "772310",
+    "imposition_type": "none_a4_standard",
+    "spool_latency_ms": 290,
+    "printer_status": "processing"
+  },
+  {
+    "timestamp": "2026-06-02T10:30:00.000Z",
+    "event_type": "cleanup_scheduler_run",
+    "expired_jobs_purged": 12,
+    "orphan_files_purged": 3,
+    "storage_reclaimed_mb": 41.5,
+    "status": "success"
+  }
+]

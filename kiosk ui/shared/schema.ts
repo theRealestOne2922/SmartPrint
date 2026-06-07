@@ -1,32 +1,50 @@
-import { pgTable, text, serial, integer, timestamp, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
+// ─── Shared TypeScript Interfaces & Zod Schemas (Kiosk UI) ───
+// Replaces old Drizzle ORM table definitions.
 import { z } from "zod";
 
-export const printJobs = pgTable("print_jobs", {
-  id: serial("id").primaryKey(),
-  jobId: varchar("job_id", { length: 6 }).notNull().unique(),
-  studentName: text("student_name").notNull().default("Student"),
-  fileName: text("file_name").notNull(),
-  filePath: text("file_path").notNull(),
-  pageCount: integer("page_count").notNull(),
-  colorMode: text("color_mode").notNull(), // 'bw' or 'color'
-  copies: integer("copies").notNull(),
-  price: integer("price").notNull(),
-  status: text("status").notNull().default("uploaded"), // uploaded, awaiting_payment, payment_confirmed, printing, completed, failed
-  stripeSessionId: text("stripe_session_id"), // stripe session id
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export interface PrintJob {
+  id: string;
+  jobId: string;
+  studentName: string;
+  teacherEmpId: string | null;
+  fileName: string;
+  filePath: string;
+  pageCount: number;
+  colorMode: string;
+  copies: number;
+  duplex: boolean;
+  orientation: string;
+  paperSize: string;
+  pageRange: string;
+  price: number;
+  status: string;
+  stripeSessionId: string | null;
+  createdAt: Date;
+  updatedAt?: Date;
+}
 
-export const insertPrintJobSchema = createInsertSchema(printJobs).omit({
-  id: true,
-  createdAt: true,
-  status: true,
-});
+export interface InsertPrintJob {
+  jobId: string;
+  studentName?: string;
+  fileName: string;
+  filePath: string;
+  pageCount: number;
+  colorMode: string;
+  copies: number;
+  price: number;
+}
 
-export type PrintJob = typeof printJobs.$inferSelect;
-export type InsertPrintJob = z.infer<typeof insertPrintJobSchema>;
+export const insertPrintJobSchema = z.object({
+  jobId: z.string().max(6),
+  studentName: z.string().optional(),
+  fileName: z.string(),
+  filePath: z.string(),
+  pageCount: z.number(),
+  colorMode: z.enum(["bw", "color"]),
+  copies: z.number().min(1).max(10),
+  price: z.number(),
+});
 
 export type CreatePrintJobRequest = InsertPrintJob;
 export type UpdatePrintJobRequest = Partial<InsertPrintJob>;
-
 export type PrintJobResponse = PrintJob;
