@@ -1,11 +1,11 @@
 // ─── Cleanup Scheduler — MongoDB Edition ───
 // Original Supabase version backed up in _supabase_backup/
-// Supabase client kept ONLY for Storage file deletion.
-import { supabase } from "./supabase";
 import { PrintJob } from "./models/PrintJob";
 import { SystemSetting } from "./models/SystemSetting";
+import fs from "fs/promises";
+import path from "path";
 
-const BUCKET = "pdfs";
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 
 /**
  * Fetches the retention duration from system_settings. Defaults to 24 hours.
@@ -47,7 +47,7 @@ export async function cleanupExpiredJobs(): Promise<void> {
         if (!job.filePath) continue;
         const urlParts = job.filePath.split("/");
         const fileName = urlParts[urlParts.length - 1];
-        if (fileName) pathsToDelete.push(`uploads/${fileName}`);
+        if (fileName) pathsToDelete.push(path.join(UPLOADS_DIR, fileName));
       }
 
       // Delete from MongoDB
@@ -55,51 +55,67 @@ export async function cleanupExpiredJobs(): Promise<void> {
       await PrintJob.deleteMany({ _id: { $in: jobIds } });
       console.log(`${label} ✅ Deleted ${jobIds.length} expired job(s) from database.`);
 
-      // Delete files from Supabase Storage
-      if (pathsToDelete.length > 0) {
-        const { error: storageDeleteErr } = await supabase.storage
-          .from(BUCKET)
-          .remove(pathsToDelete);
-        
-        if (storageDeleteErr) {
-          console.error(`${label} ❌ Failed to delete files for expired jobs:`, storageDeleteErr.message);
-        } else {
-          console.log(`${label} ✅ Deleted ${pathsToDelete.length} expired file(s) from storage.`);
+      // Delete files from local filesystem
+      let deletedFiles = 0;
+      for (const filePath of pathsToDelete) {
+        try {
+          await fs.unlink(filePath);
+          deletedFiles++;
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') {
+            console.error(`${label} ❌ Failed to delete file ${filePath}:`, e.message);
+          }
         }
       }
+      console.log(`${label} ✅ Deleted ${deletedFiles} expired file(s) from storage.`);
     } else {
       console.log(`${label} ✅ No expired jobs found.`);
     }
 
-    // 2. Standard Orphan Cleanup (files in storage with no DB record)
-    const { data: storageFiles } = await supabase.storage.from(BUCKET).list("uploads", { limit: 1000 });
+    // 2. Standard Orphan Cleanup (files in local storage with no DB record)
+    let storageFiles: string[] = [];
+    try {
+      storageFiles = await fs.readdir(UPLOADS_DIR);
+    } catch (e: any) {
+      if (e.code !== 'ENOENT') {
+        console.error(`${label} ❌ Failed to read uploads directory:`, e.message);
+      }
+    }
+
     const allJobs = await PrintJob.find().select('filePath');
     
-    if (storageFiles && allJobs) {
-      const referencedPaths = new Set(allJobs.map((j) => j.filePath).filter(Boolean));
-      const orphanPaths: string[] = [];
+    if (storageFiles.length > 0 && allJobs) {
+      const referencedFiles = new Set(allJobs.map((j) => {
+        if (!j.filePath) return null;
+        const parts = j.filePath.split("/");
+        return parts[parts.length - 1];
+      }).filter(Boolean));
+      
+      let deletedOrphans = 0;
       const orphanCutoffMs = 3 * 60 * 60 * 1000; // 3 hours grace period for orphans
 
-      // Compute the public URL base once instead of calling getPublicUrl() per file
-      const { data: { publicUrl: baseUrl } } = supabase.storage.from(BUCKET).getPublicUrl("uploads/");
-
-      for (const file of storageFiles) {
-        if (file.name === ".emptyFolderPlaceholder") continue;
+      for (const fileName of storageFiles) {
+        if (fileName === ".emptyFolderPlaceholder" || fileName === ".gitkeep") continue;
         
-        const fileAgeMs = now.getTime() - new Date(file.created_at).getTime();
-        if (fileAgeMs < orphanCutoffMs) continue;
+        const filePath = path.join(UPLOADS_DIR, fileName);
+        
+        try {
+          const stats = await fs.stat(filePath);
+          const fileAgeMs = now.getTime() - stats.mtime.getTime();
+          
+          if (fileAgeMs < orphanCutoffMs) continue;
 
-        const storagePath = `uploads/${file.name}`;
-        const publicUrl = `${baseUrl}${file.name}`;
-
-        if (!referencedPaths.has(publicUrl)) {
-          orphanPaths.push(storagePath);
+          if (!referencedFiles.has(fileName)) {
+            await fs.unlink(filePath);
+            deletedOrphans++;
+          }
+        } catch (err: any) {
+           console.error(`${label} ❌ Failed to process orphan ${fileName}:`, err.message);
         }
       }
 
-      if (orphanPaths.length > 0) {
-        await supabase.storage.from(BUCKET).remove(orphanPaths);
-        console.log(`${label} 🧹 Deleted ${orphanPaths.length} orphan file(s) older than 3h.`);
+      if (deletedOrphans > 0) {
+        console.log(`${label} 🧹 Deleted ${deletedOrphans} orphan file(s) older than 3h.`);
       }
     }
 

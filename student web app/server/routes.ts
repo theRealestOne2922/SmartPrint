@@ -11,7 +11,6 @@ import path from "path";
 import rateLimit from "express-rate-limit";
 import express from "express";
 import officeCrypto from "officecrypto-tool";
-import { supabase } from "./supabase";
 import { PrintJob } from "./models/PrintJob";
 import { Admin } from "./models/Admin";
 import { SystemSetting } from "./models/SystemSetting";
@@ -97,30 +96,16 @@ export async function registerRoutes(
       // Hash the file for deduplication
       const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
       const ext = path.extname(req.file.originalname) || '';
-      const storagePath = `uploads/${hash}${ext}`;
+      const filename = `${hash}${ext}`;
+      const storagePath = path.join(UPLOADS_DIR, filename);
 
-      // Upload to Supabase Storage (upsert:true handles duplicates gracefully)
-      const { data, error } = await supabase.storage
-        .from("pdfs")
-        .upload(storagePath, req.file.buffer, {
-          contentType: req.file.mimetype || "application/octet-stream",
-          upsert: true, // Overwrite if same file already exists
-        });
+      // Save to local filesystem
+      await fs.writeFile(storagePath, req.file.buffer);
 
-      if (error) {
-        console.error("Supabase Storage error:", error);
-        const isNetworkError = error.message?.includes("fetch failed") || error.message?.includes("ENOTFOUND");
-        throw new Error(
-          isNetworkError
-            ? "Cannot reach Supabase. Check your SUPABASE_URL in .env and ensure your Supabase project is active (not paused)."
-            : `File upload failed: ${error.message}`
-        );
-      }
-
-      // Get the public URL for the uploaded file
-      const { data: { publicUrl } } = supabase.storage
-        .from("pdfs")
-        .getPublicUrl(storagePath);
+      // Construct the public URL for the uploaded file
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.headers['x-forwarded-host'] || req.get('host');
+      const publicUrl = `${protocol}://${host}/uploads/${filename}`;
 
       let pageCount = 1;
       if (req.file.mimetype === "application/pdf" || req.file.originalname.toLowerCase().endsWith(".pdf")) {

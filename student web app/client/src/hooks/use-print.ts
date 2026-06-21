@@ -3,7 +3,6 @@
 // Supabase client is kept ONLY for Storage uploads.
 // Original version backed up in _supabase_backup/
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase"; // STORAGE ONLY
 import { API_BASE } from "@/lib/api-config";
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
@@ -102,26 +101,28 @@ export function useUploadFile() {
       }
       // .txt defaults to 1 (no reliable way to estimate without font metrics)
 
-      // Generate a unique path
-      const fileExt = file.name.indexOf('.') !== -1 ? file.name.substring(file.name.lastIndexOf('.')) : '';
-      const randomString = Math.random().toString(36).substring(2, 15);
-      const storagePath = `uploads/${randomString}-${Date.now()}${fileExt}`;
+      // Upload directly to Express API
+      const formData = new FormData();
+      formData.append("file", file);
 
-      // Upload to Supabase Storage (STILL using Supabase for file storage)
-      const { data, error } = await supabase.storage
-        .from("pdfs")
-        .upload(storagePath, file, {
-          contentType: file.type || "application/octet-stream",
-          upsert: true,
-        });
+      const response = await fetch(`${API_BASE}/api/upload`, {
+        method: "POST",
+        body: formData,
+      });
 
-      if (error) {
-        throw new Error(error.message);
+      if (!response.ok) {
+        let errorMsg = "Upload failed";
+        try {
+          const errRes = await response.json();
+          errorMsg = errRes.message || errorMsg;
+        } catch (e) {
+          // Fallback if not JSON
+        }
+        throw new Error(errorMsg);
       }
 
-      const { data: { publicUrl } } = supabase.storage
-        .from("pdfs")
-        .getPublicUrl(storagePath);
+      const data = await response.json();
+      const publicUrl = data.filePath;
 
       return {
         filePath: publicUrl,
