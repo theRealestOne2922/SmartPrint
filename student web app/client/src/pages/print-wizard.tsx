@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { PDFDocument } from "pdf-lib";
 // Supabase import removed — settings now fetched via Express API (MongoDB)
+import { API_BASE } from "@/lib/api-config";
 import officeCrypto from "officecrypto-tool";
 import * as pdfjs from "pdfjs-dist";
 
@@ -234,7 +235,7 @@ export default function PrintWizard() {
   useEffect(() => {
     async function fetchSettings() {
       try {
-        const res = await fetch("/api/settings");
+        const res = await fetch(`${API_BASE}/api/settings`);
         if (!res.ok) throw new Error("Failed to fetch settings");
         const settings = await res.json();
         const maxFilesSetting = settings.find((s: any) => s.key === "maxFilesLimit");

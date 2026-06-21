@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -12,6 +13,20 @@ import { SystemSetting } from "./models/SystemSetting";
 
 const app = express();
 const httpServer = createServer(app);
+
+// CORS — allow Firebase Hosting frontend to talk to this Oracle VM backend
+app.use(cors({
+  origin: [
+    "https://smartprintvit.web.app",
+    "https://smartprintvit.firebaseapp.com",
+    "http://localhost:5173",      // Vite dev server
+    "http://localhost:5000",      // local Express
+    "http://140.245.224.137",    // Oracle VM direct access
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 declare module "http" {
   interface IncomingMessage {

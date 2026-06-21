@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Keypad } from "@/components/Keypad";
+import { API_BASE } from "@/lib/api-config";
 import { PageTransition } from "@/components/PageTransition";
 import { motion } from "framer-motion";
 
@@ -34,7 +35,7 @@ export function IdleScreen() {
       // Look up the job via Express API (was: supabase.from('print_jobs')...)
       const lookupJob = async () => {
         try {
-          const res = await fetch(`/api/jobs/lookup/${pin}`);
+          const res = await fetch(`${API_BASE}/api/jobs/lookup/${pin}`);
 
           if (!res.ok) {
             setError("No print job found for this code.");

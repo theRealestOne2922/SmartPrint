@@ -3,6 +3,7 @@
 // Field names now use camelCase (from MongoDB/Mongoose) instead of snake_case (from Supabase REST).
 // Original version backed up in _supabase_backup/
 import { useEffect, useState } from "react";
+import { API_BASE } from "@/lib/api-config";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -38,14 +39,14 @@ export default function AdminDashboard() {
   const fetchDashboardData = async () => {
     try {
       // Fetch Jobs via Express API (was: supabase.from("print_jobs").select("*"))
-      const jobsRes = await fetch('/api/print-jobs');
+      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`);
       if (jobsRes.ok) {
         const printJobs = await jobsRes.json();
         if (printJobs) setJobs(printJobs);
       }
 
       // Fetch Settings via Express API (was: supabase.from("system_settings").select("*"))
-      const settingsRes = await fetch('/api/settings');
+      const settingsRes = await fetch(`${API_BASE}/api/settings`);
       if (settingsRes.ok) {
         const settingsData = await settingsRes.json();
         if (settingsData) {
@@ -69,7 +70,7 @@ export default function AdminDashboard() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const jobsRes = await fetch('/api/print-jobs');
+      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`);
       if (jobsRes.ok) {
         const printJobs = await jobsRes.json();
         if (printJobs) setJobs(printJobs);
@@ -86,7 +87,7 @@ export default function AdminDashboard() {
     setSavingSettings(true);
     try {
       // Update settings via Express API (was: supabase.from("system_settings").upsert(...))
-      await fetch('/api/admin/settings', {
+      await fetch(`${API_BASE}/api/admin/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -98,7 +99,7 @@ export default function AdminDashboard() {
       });
 
       // Actively trigger cleanup based on new retention settings
-      await fetch("/api/admin/cleanup", { method: "POST" }).catch(console.error);
+      await fetch(`${API_BASE}/api/admin/cleanup`, { method: "POST" }).catch(console.error);
       
       // Refresh the table so disappeared files are immediately removed from UI
       await fetchDashboardData();

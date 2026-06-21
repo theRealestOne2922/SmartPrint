@@ -4,6 +4,7 @@
 // Original version backed up in _supabase_backup/
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase"; // STORAGE ONLY
+import { API_BASE } from "@/lib/api-config";
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 
@@ -145,7 +146,7 @@ export async function getUniqueJobId(): Promise<string> {
       throw new Error('Failed to generate a unique job ID after maximum retries.');
     }
     // Check uniqueness via Express API (was: direct Supabase query)
-    const res = await fetch(`/api/print-jobs/check-unique/${jobId}`);
+    const res = await fetch(`${API_BASE}/api/print-jobs/check-unique/${jobId}`);
     const data = await res.json();
     if (data.exists) {
       jobId = generatePrintId();
@@ -170,7 +171,7 @@ export function useCreatePrintJob() {
       const teacherEmpId = localStorage.getItem("teacherId");
 
       // Create job via Express API (was: direct Supabase insert)
-      const res = await fetch('/api/print-jobs', {
+      const res = await fetch(`${API_BASE}/api/print-jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -228,7 +229,7 @@ export function usePrintJob(jobId: string) {
     queryKey: ['print-job', jobId],
     queryFn: async (): Promise<PrintJobResponse[]> => {
       // Fetch via Express API (was: direct Supabase query)
-      const res = await fetch(`/api/print-jobs/${jobId}`);
+      const res = await fetch(`${API_BASE}/api/print-jobs/${jobId}`);
       if (!res.ok) {
         throw new Error("Job not found");
       }

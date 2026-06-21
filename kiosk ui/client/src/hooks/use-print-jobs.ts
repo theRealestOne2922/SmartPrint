@@ -1,5 +1,6 @@
 // ─── Kiosk Print Job Hooks — MongoDB Edition ───
 // All Supabase database calls replaced with Express API fetch().
+import { API_BASE } from "@/lib/api-config";
 // Mongoose returns camelCase fields, so the mapJob() function is simplified.
 // Original version backed up in _supabase_backup/
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -31,7 +32,7 @@ export function usePrintJob(printId: string | null, pollInterval?: number) {
       if (!printId) return null;
 
       // Fetch via Express API (was: supabase.from('print_jobs').select('*').eq('job_id', printId))
-      const res = await fetch(`/api/jobs/lookup/${printId}`);
+      const res = await fetch(`${API_BASE}/api/jobs/lookup/${printId}`);
       if (!res.ok) {
         throw new Error("Job not found");
       }
@@ -51,7 +52,7 @@ export function useUpdatePrintJobStatus() {
   return useMutation({
     mutationFn: async ({ printId, status }: { printId: string; status: string }) => {
       // Update via Express API (was: supabase.from('print_jobs').update({ status }).eq('job_id', printId))
-      const res = await fetch(`/api/jobs/${printId}/status`, {
+      const res = await fetch(`${API_BASE}/api/jobs/${printId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
@@ -82,7 +83,7 @@ export function useUpdatePrintJobDetails() {
   return useMutation({
     mutationFn: async ({ id, jobId, updates }: { id: string; jobId: string; updates: { pageCount?: number; colorMode?: 'bw' | 'color'; copies?: number; duplex?: boolean; orientation?: 'portrait' | 'landscape'; paperSize?: 'a4' | 'a3' } }) => {
       // Update via Express API (was: supabase.from('print_jobs').update(...).eq('id', id))
-      const res = await fetch(`/api/jobs/${id}/details`, {
+      const res = await fetch(`${API_BASE}/api/jobs/${id}/details`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -135,7 +136,7 @@ export function useDeletePrintJobItem() {
   return useMutation({
     mutationFn: async ({ id, jobId }: { id: string; jobId: string }) => {
       // Delete via Express API (was: supabase.from('print_jobs').delete().eq('id', id))
-      const res = await fetch(`/api/jobs/${id}`, {
+      const res = await fetch(`${API_BASE}/api/jobs/${id}`, {
         method: 'DELETE',
       });
 

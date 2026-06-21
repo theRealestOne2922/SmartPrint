@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE } from "@/lib/api-config";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
@@ -36,7 +37,7 @@ export default function AdminLogin() {
 
     try {
       // Authenticate via Express API (was: direct Supabase query on admins table)
-      const res = await fetch('/api/admin/login', {
+      const res = await fetch(`${API_BASE}/api/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
