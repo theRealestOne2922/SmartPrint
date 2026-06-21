@@ -10,7 +10,7 @@ import { FileText, File, UploadCloud, X, Minus, Plus, Image, FileSpreadsheet, La
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { PDFDocument } from "pdf-lib";
-import { supabase } from "@/lib/supabase";
+// Supabase import removed — settings now fetched via Express API (MongoDB)
 import officeCrypto from "officecrypto-tool";
 import * as pdfjs from "pdfjs-dist";
 
@@ -234,18 +234,12 @@ export default function PrintWizard() {
   useEffect(() => {
     async function fetchSettings() {
       try {
-        const { data, error } = await supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "maxFilesLimit")
-          .single();
-        
-        if (error) {
-          console.error("Supabase settings error:", error);
-        }
-        
-        if (data && data.value) {
-          const limit = parseInt(data.value, 10);
+        const res = await fetch("/api/settings");
+        if (!res.ok) throw new Error("Failed to fetch settings");
+        const settings = await res.json();
+        const maxFilesSetting = settings.find((s: any) => s.key === "maxFilesLimit");
+        if (maxFilesSetting?.value) {
+          const limit = parseInt(maxFilesSetting.value, 10);
           if (!isNaN(limit)) setMaxFiles(limit);
         }
       } catch (e) {
