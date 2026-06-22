@@ -1,9 +1,7 @@
-// ─── SmartPrint Pi Print Agent v4.0 — MongoDB Edition ───
-// Original Supabase version backed up in _supabase_backup/
-// Database: MongoDB (Mongoose) — replaces all supabase.from() calls
-// Realtime: MongoDB Change Streams — replaces Supabase Realtime
-// Storage: Supabase Storage KEPT for file cleanup (remove old files from bucket)
-import { createClient } from '@supabase/supabase-js';
+// ─── SmartPrint Pi Print Agent v4.1 — MongoDB Edition ───
+// Database: MongoDB (Mongoose)
+// Realtime: MongoDB Change Streams
+// Storage: Files stored locally on Oracle VM (no Supabase)
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -29,17 +27,6 @@ const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
     console.error('Missing MONGODB_URI! Please check your .env file.');
     process.exit(1);
-}
-
-// ─── Supabase Client (STORAGE ONLY — for file cleanup) ───
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-let supabase = null;
-if (supabaseUrl && supabaseServiceKey) {
-    supabase = createClient(supabaseUrl, supabaseServiceKey);
-    console.log('✅ Supabase client initialized (STORAGE ONLY)');
-} else {
-    console.warn('⚠️  Supabase credentials missing — file cleanup will skip storage deletion');
 }
 
 // Extensions that need conversion to PDF before printing.
@@ -394,15 +381,7 @@ async function cleanupOldJobs() {
         let deletedCount = 0;
         for (const job of oldJobs) {
             try {
-                // Extract filename from the Supabase storage URL and delete from storage
-                if (supabase && job.filePath && job.filePath.includes('/storage/v1/object/public/pdfs/')) {
-                    const storagePath = job.filePath.split('/storage/v1/object/public/pdfs/')[1];
-                    if (storagePath) {
-                        await supabase.storage.from('pdfs').remove([storagePath]);
-                    }
-                }
-                
-                // Delete from MongoDB
+                // Delete from MongoDB (file cleanup is handled by the Express backend)
                 await PrintJob.deleteOne({ _id: job._id });
                 deletedCount++;
             } catch (err) {
