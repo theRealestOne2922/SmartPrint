@@ -24,7 +24,7 @@ export interface IPrintJobDocument extends IPrintJob, Document {}
 
 const printJobSchema = new Schema<IPrintJobDocument>(
   {
-    jobId: { type: String, required: true, unique: true, maxlength: 6 },
+    jobId: { type: String, required: true, maxlength: 6 },
     studentName: { type: String, required: true, default: 'Teacher' },
     teacherEmpId: { type: String, default: null },
     fileName: { type: String, required: true },
