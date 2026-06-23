@@ -29,8 +29,8 @@ const upload = multer({
 // Rate limiting: 5 uploads per hour per IP
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
-  message: { message: "Rate limit exceeded: 5 uploads per hour" },
+  max: 500, // Increased for testing
+  message: { message: "Rate limit exceeded: 500 uploads per hour" },
   standardHeaders: true,
   legacyHeaders: false,
 });
