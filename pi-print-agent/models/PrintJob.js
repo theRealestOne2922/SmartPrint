@@ -15,6 +15,8 @@ const printJobSchema = new mongoose.Schema({
     pageRange: { type: String, default: 'all' },
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
+    confidential: { type: Boolean, default: false },
+    encrypted: { type: Boolean, default: false },
     stripeSessionId: { type: String, default: null },
 }, {
     timestamps: true,

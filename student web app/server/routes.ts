@@ -13,9 +13,11 @@ import express from "express";
 import officeCrypto from "officecrypto-tool";
 import { PrintJob } from "./models/PrintJob";
 import { Admin } from "./models/Admin";
+import { Teacher } from "./models/Teacher";
 import { SystemSetting } from "./models/SystemSetting";
 import { cleanupExpiredJobs } from "./cleanup";
 import { broadcastJobUpdate } from "./websocket";
+import { sendOtpEmail } from "./emailService";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // Ensure uploads dir exists
@@ -198,6 +200,7 @@ export async function registerRoutes(
         jobId: providedJobId,
         studentName,
         teacherEmpId,
+        teacherEmail,
         fileName,
         filePath,
         pageCount,
@@ -207,6 +210,7 @@ export async function registerRoutes(
         orientation,
         paperSize,
         pageRange,
+        confidential,
         price: providedPrice,
       } = req.body;
 
@@ -221,12 +225,43 @@ export async function registerRoutes(
         }
       }
 
+      let finalFilePath = filePath;
+      let encrypted = false;
+
+      // ENCRYPTION for Confidential Faculty Jobs
+      if (teacherEmpId && confidential) {
+        try {
+          // Extract the filename from the public URL filePath
+          const urlObj = new URL(filePath);
+          const localFileName = path.basename(urlObj.pathname);
+          const localPath = path.join(UPLOADS_DIR, localFileName);
+
+          // Read the file from disk
+          const fileBuffer = await fs.readFile(localPath);
+
+          // Generate encryption key based on Faculty ID + OTP (Job ID)
+          const key = crypto.createHash('sha256').update(teacherEmpId + jobId).digest();
+          const iv = crypto.randomBytes(16);
+          const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+
+          const encryptedBuffer = Buffer.concat([iv, cipher.update(fileBuffer), cipher.final()]);
+
+          // Write encrypted data back to the same path
+          await fs.writeFile(localPath, encryptedBuffer);
+          encrypted = true;
+          console.log(`🔒 Encrypted file ${localFileName} for Job ${jobId}`);
+        } catch (encErr) {
+          console.error("Encryption failed:", encErr);
+          // Fall back to unencrypted if it fails, or you could abort the job
+        }
+      }
+
       const job = await PrintJob.create({
         jobId,
         studentName: studentName || "Student",
         teacherEmpId: teacherEmpId || null,
         fileName,
-        filePath,
+        filePath: finalFilePath,
         pageCount,
         colorMode,
         copies,
@@ -236,7 +271,15 @@ export async function registerRoutes(
         pageRange: pageRange || 'all',
         price,
         status: 'uploaded',
+        confidential: confidential || false,
+        encrypted,
       });
+
+      // Send Email OTP if teacherEmail is provided
+      if (teacherEmail) {
+        // Run asynchronously so it doesn't block the response
+        sendOtpEmail(teacherEmail, studentName || "Faculty Member", jobId, fileName).catch(console.error);
+      }
 
       res.status(201).json(job.toJSON());
     } catch (err: any) {
@@ -301,8 +344,151 @@ export async function registerRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // ADMIN — MongoDB
+  // ADMIN & TEACHER — MongoDB
   // ═══════════════════════════════════════════════════════════════
+
+  app.post("/api/teacher/register", async (req, res) => {
+    try {
+      const { name, email, password, empId } = req.body;
+      if (!name || !email || !password || !empId) {
+        return res.status(400).json({ message: "Name, email, password, and empId are required" });
+      }
+
+      // Check if email or empId already exists
+      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] });
+      if (existing) {
+        return res.status(400).json({ message: "Teacher with this email or Employee ID already exists" });
+      }
+
+      const teacher = await Teacher.create({
+        name,
+        email,
+        password, // In production, hash this with bcrypt!
+        empId,
+        department: 'General',
+      });
+
+      res.status(201).json({ success: true, message: "Teacher account created" });
+    } catch (err: any) {
+      console.error("Teacher registration error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/teacher/login", async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ message: "Email and password are required" });
+      }
+
+      const teacher = await Teacher.findOne({ email });
+
+      // Plain text check for demo purposes (use bcrypt in production)
+      if (!teacher || teacher.password !== password) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      res.json({ 
+        success: true, 
+        name: teacher.name, 
+        email: teacher.email, 
+        empId: teacher.empId 
+      });
+    } catch (err: any) {
+      console.error("Teacher login error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/teacher/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      const teacher = await Teacher.findOne({ email });
+      if (!teacher) {
+        // Return 200 even if not found to prevent email enumeration
+        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+      }
+
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Save OTP to teacher document, expires in 15 minutes
+      teacher.resetPasswordOtp = otp;
+      teacher.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
+      await teacher.save();
+
+      // Send the email
+      const { sendPasswordResetEmail } = await import('./emailService');
+      await sendPasswordResetEmail(teacher.email, teacher.name, otp);
+
+      res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+    } catch (err: any) {
+      console.error("Forgot password error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/teacher/verify-reset-otp", async (req, res) => {
+    try {
+      const { email, otp } = req.body;
+      if (!email || !otp) {
+        return res.status(400).json({ message: "Email and OTP are required" });
+      }
+
+      const teacher = await Teacher.findOne({ 
+        email,
+        resetPasswordOtp: otp,
+        resetPasswordExpires: { $gt: new Date() } // Ensure it hasn't expired
+      });
+
+      if (!teacher) {
+        return res.status(400).json({ message: "Invalid or expired OTP" });
+      }
+
+      res.json({ success: true, message: "OTP verified" });
+    } catch (err: any) {
+      console.error("Verify OTP error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/teacher/reset-password", async (req, res) => {
+    try {
+      const { email, otp, newPassword } = req.body;
+      if (!email || !otp || !newPassword) {
+        return res.status(400).json({ message: "Email, OTP, and new password are required" });
+      }
+
+      const teacher = await Teacher.findOne({ 
+        email,
+        resetPasswordOtp: otp,
+        resetPasswordExpires: { $gt: new Date() }
+      });
+
+      if (!teacher) {
+        return res.status(400).json({ message: "Invalid or expired OTP" });
+      }
+
+      // Update password
+      teacher.password = newPassword; // Using plaintext for prototype; bcrypt in prod
+      
+      // Clear OTP fields
+      teacher.resetPasswordOtp = undefined;
+      teacher.resetPasswordExpires = undefined;
+      
+      await teacher.save();
+
+      res.json({ success: true, message: "Password has been reset successfully" });
+    } catch (err: any) {
+      console.error("Reset password error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
 
   app.post("/api/admin/login", async (req, res) => {
     try {

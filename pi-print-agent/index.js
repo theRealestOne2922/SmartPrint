@@ -13,6 +13,7 @@ import { exec } from 'child_process';
 import util from 'util';
 import https from 'https';
 import http from 'http';
+import crypto from 'crypto';
 
 import { PrintJob } from './models/PrintJob.js';
 
@@ -151,6 +152,22 @@ async function processJob(job) {
         await downloadFile(job.filePath, tempFilePath);
         const dlStat = await fs.stat(tempFilePath);
         console.log(`[JOB ${job.jobId}] Downloaded: ${(dlStat.size / 1024).toFixed(1)} KB`);
+
+        // 1.5 Decrypt if encrypted
+        if (job.encrypted && job.teacherEmpId) {
+            console.log(`[JOB ${job.jobId}] 🔒 File is encrypted. Decrypting...`);
+            const fileBuffer = await fs.readFile(tempFilePath);
+            
+            const iv = fileBuffer.slice(0, 16);
+            const encryptedData = fileBuffer.slice(16);
+            
+            const key = crypto.createHash('sha256').update(job.teacherEmpId + job.jobId).digest();
+            const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+            
+            const decryptedBuffer = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+            await fs.writeFile(tempFilePath, decryptedBuffer);
+            console.log(`[JOB ${job.jobId}] 🔓 Decryption successful.`);
+        }
 
         // 2. Convert to PDF if needed (Office docs + images)
         if (NEEDS_CONVERSION.has(ext)) {

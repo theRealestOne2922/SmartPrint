@@ -15,6 +15,8 @@ export interface IPrintJob {
   pageRange: string;
   price: number;
   status: string;
+  confidential: boolean;
+  encrypted: boolean;
   stripeSessionId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -42,6 +44,8 @@ const printJobSchema = new Schema<IPrintJobDocument>(
     pageRange: { type: String, default: 'all' },
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
+    confidential: { type: Boolean, default: false },
+    encrypted: { type: Boolean, default: false },
     stripeSessionId: { type: String, default: null },
   },
   {

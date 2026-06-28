@@ -13,10 +13,12 @@ import {
 } from "@/components/ui/card";
 import { API_BASE } from "@/lib/api-config";
 
-export default function TeacherLogin() {
+export default function TeacherRegister() {
   const [, setLocation] = useLocation();
-  const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [empId, setEmpId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
@@ -25,31 +27,25 @@ export default function TeacherLogin() {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/teacher/login`, {
+      const res = await fetch(`${API_BASE}/api/teacher/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: username, password }),
+        body: JSON.stringify({ name, email, password, empId }),
       });
 
       if (!res.ok) {
         const errorData = await res.json();
-        throw new Error(errorData.message || "Invalid credentials");
+        throw new Error(errorData.message || "Registration failed");
       }
 
-      const data = await res.json();
-
-      localStorage.setItem("teacherId", data.empId);
-      localStorage.setItem("teacherName", data.name);
-      localStorage.setItem("teacherEmail", data.email);
-
       toast({
-        title: "Logged in successfully",
-        description: `Welcome back, ${data.name}!`,
+        title: "Account Created Successfully!",
+        description: "You can now log in with your credentials.",
       });
-      setLocation("/print");
+      setLocation("/teacher-login");
     } catch (err: any) {
       toast({
-        title: "Login Failed",
+        title: "Registration Failed",
         description: err.message,
         variant: "destructive",
       });
@@ -94,7 +90,7 @@ export default function TeacherLogin() {
           </div>
         </motion.div>
 
-        {/* Login Card */}
+        {/* Register Card */}
         <Card className="border-zinc-200 bg-white shadow-soft">
           <CardHeader className="text-center space-y-2 pb-2">
             <motion.div
@@ -103,7 +99,7 @@ export default function TeacherLogin() {
               transition={{ duration: 0.5, delay: 0.25 }}
             >
               <CardTitle className="text-2xl font-bold text-zinc-950 tracking-tight">
-                Teacher Portal
+                Create Teacher Account
               </CardTitle>
             </motion.div>
             <motion.div
@@ -112,7 +108,7 @@ export default function TeacherLogin() {
               transition={{ duration: 0.5, delay: 0.35 }}
             >
               <CardDescription className="text-zinc-500 text-sm">
-                Sign in with your VIT credentials to access SmartPrint
+                Register to manage your print jobs
               </CardDescription>
             </motion.div>
           </CardHeader>
@@ -120,57 +116,80 @@ export default function TeacherLogin() {
           <CardContent className="pt-4">
             <motion.form
               onSubmit={handleSubmit}
-              className="space-y-5"
+              className="space-y-4"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 0.45 }}
             >
-              {/* Username / Emp ID */}
-              <div className="space-y-2">
-                <Label
-                  htmlFor="username"
-                  className="text-zinc-700 text-sm font-medium"
-                >
-                  Username / Emp ID
+              {/* Name */}
+              <div className="space-y-1.5">
+                <Label htmlFor="name" className="text-zinc-700 text-sm font-medium">
+                  Full Name
                 </Label>
                 <Input
-                  id="username"
+                  id="name"
                   type="text"
-                  placeholder="Enter your Employee ID"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  placeholder="Enter your full name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
+                />
+              </div>
+
+              {/* Email */}
+              <div className="space-y-1.5">
+                <Label htmlFor="email" className="text-zinc-700 text-sm font-medium">
+                  Email Address (for OTP)
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  required
+                  placeholder="e.g. faculty@vit.ac.in"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
+                />
+              </div>
+
+              {/* Emp ID */}
+              <div className="space-y-1.5">
+                <Label htmlFor="empId" className="text-zinc-700 text-sm font-medium">
+                  Employee ID / Faculty ID
+                </Label>
+                <Input
+                  id="empId"
+                  type="text"
+                  required
+                  placeholder="e.g. VIT12345"
+                  value={empId}
+                  onChange={(e) => setEmpId(e.target.value)}
                   className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
                 />
               </div>
 
               {/* Password */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label
-                    htmlFor="password"
-                    className="text-zinc-700 text-sm font-medium"
-                  >
-                    Password
-                  </Label>
-                  <a href="/forgot-password" className="text-xs text-primary font-semibold hover:underline">
-                    Forgot password?
-                  </a>
-                </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="password" className="text-zinc-700 text-sm font-medium">
+                  Password
+                </Label>
                 <Input
                   id="password"
                   type="password"
-                  placeholder="Enter your password"
+                  required
+                  placeholder="Create a password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
                 />
               </div>
 
-              {/* Login Button */}
+              {/* Register Button */}
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-11 rounded-md bg-primary text-black font-semibold text-sm tracking-wide hover:bg-primary/90 active:bg-primary/80 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-white flex items-center justify-center gap-2"
+                className="w-full h-11 mt-2 rounded-md bg-primary text-black font-semibold text-sm tracking-wide hover:bg-primary/90 active:bg-primary/80 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-white flex items-center justify-center gap-2"
               >
                 {isLoading ? (
                   <>
@@ -180,32 +199,21 @@ export default function TeacherLogin() {
                       fill="none"
                       viewBox="0 0 24 24"
                     >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    <span>Signing in…</span>
+                    <span>Creating Account…</span>
                   </>
                 ) : (
-                  "Sign In"
+                  "Create Account"
                 )}
               </button>
             </motion.form>
 
             <div className="mt-6 text-center text-sm">
-              <span className="text-zinc-500">Don't have an account? </span>
-              <a href="/teacher-register" className="text-primary font-semibold hover:underline">
-                Create one
+              <span className="text-zinc-500">Already have an account? </span>
+              <a href="/teacher-login" className="text-primary font-semibold hover:underline">
+                Sign in
               </a>
             </div>
           </CardContent>

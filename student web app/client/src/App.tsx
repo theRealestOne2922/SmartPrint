@@ -12,6 +12,8 @@ import JobStatus from "./pages/job-status";
 import BatchStatus from "./pages/batch-status";
 import NotFound from "@/pages/not-found";
 import TeacherLogin from "./pages/teacher-login";
+import TeacherRegister from "./pages/teacher-register";
+import ForgotPassword from "./pages/forgot-password";
 import AdminLogin from "./pages/admin-login";
 import AdminDashboard from "./pages/admin-dashboard";
 
@@ -33,6 +35,8 @@ function Router() {
       <Route path="/status/:jobId" component={JobStatus} />
       <Route path="/batch-status" component={BatchStatus} />
       <Route path="/teacher-login" component={TeacherLogin} />
+      <Route path="/teacher-register" component={TeacherRegister} />
+      <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/admin-login" component={AdminLogin} />
       <Route path="/admin-dashboard" component={AdminDashboard} />
       {/* Fallback to 404 */}

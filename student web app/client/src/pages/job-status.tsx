@@ -13,6 +13,7 @@ export default function JobStatus() {
   const { toast } = useToast();
 
   const { data: jobs, isLoading, isError } = usePrintJob(jobId);
+  const teacherEmail = typeof window !== 'undefined' ? localStorage.getItem("teacherEmail") : null;
 
   const copyToClipboard = () => {
     if (jobId) {
@@ -72,24 +73,36 @@ export default function JobStatus() {
           {isMultiFile ? `${jobs.length} documents are securely stored.` : 'Your document is securely stored.'}
         </p>
 
-        {/* Massive ID Card */}
-        <div className="w-full bg-card border-2 border-primary/20 rounded-[2rem] p-8 text-center relative shadow-soft overflow-hidden mb-8">
-          <div className="absolute top-0 left-0 w-full h-2 bg-primary" />
-          <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Your Print Code</p>
-
-          <div className="flex items-center justify-center gap-4 mb-2">
-            <h2 className="text-6xl sm:text-7xl font-display font-bold tracking-widest text-foreground">
-              {jobId}
-            </h2>
+        {/* Massive ID Card or Email Notice */}
+        {teacherEmail ? (
+          <div className="w-full bg-primary/10 border-2 border-primary/20 rounded-[2rem] p-8 text-center relative shadow-soft overflow-hidden mb-8">
+            <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 text-primary shadow-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+            </div>
+            <h2 className="text-2xl font-bold text-foreground mb-2">Check Your Email</h2>
+            <p className="text-muted-foreground text-balance">
+              Your 6-digit Print Code has been sent to <strong>{teacherEmail}</strong> for security purposes.
+            </p>
           </div>
+        ) : (
+          <div className="w-full bg-card border-2 border-primary/20 rounded-[2rem] p-8 text-center relative shadow-soft overflow-hidden mb-8">
+            <div className="absolute top-0 left-0 w-full h-2 bg-primary" />
+            <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Your Print Code</p>
 
-          <button
-            onClick={copyToClipboard}
-            className="inline-flex items-center gap-2 text-primary-foreground bg-foreground/5 hover:bg-foreground/10 px-4 py-2 rounded-full text-sm font-medium transition-colors mt-6"
-          >
-            <Copy className="w-4 h-4" /> Copy Code
-          </button>
-        </div>
+            <div className="flex items-center justify-center gap-4 mb-2">
+              <h2 className="text-6xl sm:text-7xl font-display font-bold tracking-widest text-foreground">
+                {jobId}
+              </h2>
+            </div>
+
+            <button
+              onClick={copyToClipboard}
+              className="inline-flex items-center gap-2 text-primary-foreground bg-foreground/5 hover:bg-foreground/10 px-4 py-2 rounded-full text-sm font-medium transition-colors mt-6"
+            >
+              <Copy className="w-4 h-4" /> Copy Code
+            </button>
+          </div>
+        )}
 
         {/* Receipt Details */}
         <div className="w-full bg-secondary/50 rounded-2xl p-6 mb-10 border border-border/50">

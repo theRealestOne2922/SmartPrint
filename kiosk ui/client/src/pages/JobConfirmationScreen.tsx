@@ -14,12 +14,16 @@ export function JobConfirmationScreen() {
   const updateDetailsMutation = useUpdatePrintJobDetails();
   const deleteItemMutation = useDeletePrintJobItem();
 
-  // Kiosk Drag-to-Scroll State
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isPointerDown, setIsPointerDown] = useState(false);
   const [startY, setStartY] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+
+  // Confidential verification state
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [facultyIdInput, setFacultyIdInput] = useState("");
+  const [authError, setAuthError] = useState("");
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!scrollRef.current) return;
@@ -97,15 +101,35 @@ export function JobConfirmationScreen() {
     );
   }
 
-  const formatCost = (price: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR'
-    }).format(price);
-  };
 
   const totalPages = jobs.reduce((sum, job) => sum + (job.pageCount * job.copies), 0);
   const isMultiFile = jobs.length > 1;
+  const isConfidential = jobs.some(job => job.confidential);
+
+  const handleRelease = () => {
+    if (isConfidential) {
+      setShowAuthModal(true);
+      return;
+    }
+    executeRelease();
+  };
+
+  const executeRelease = () => {
+    updateStatusMutation.mutate({ printId, status: 'printing' }, {
+      onSuccess: () => setLocation(`/printing/${printId}`)
+    });
+  };
+
+  const handleAuthSubmit = () => {
+    const requiredEmpId = jobs.find(j => j.confidential)?.teacherEmpId;
+    if (facultyIdInput.trim() === requiredEmpId) {
+      setAuthError("");
+      setShowAuthModal(false);
+      executeRelease();
+    } else {
+      setAuthError("Invalid Faculty ID. Please try again.");
+    }
+  };
 
   return (
     <PageTransition className="p-4 flex-1 flex flex-col min-h-0">
@@ -117,7 +141,15 @@ export function JobConfirmationScreen() {
 
         <div className="bg-white kiosk-shadow rounded-[2rem] p-6 mb-4 flex-1 flex flex-col min-h-0">
           <div className="flex justify-between items-center border-b pb-3 mb-4 shrink-0">
-            <span className="text-lg text-muted-foreground font-semibold">Uploaded by: <span className="text-black font-bold">{jobs[0].studentName || 'Teacher'}</span></span>
+            <span className="text-lg text-muted-foreground font-semibold">
+              Uploaded by: <span className="text-black font-bold">{jobs[0].studentName || 'Teacher'}</span>
+              {isConfidential && (
+                <span className="ml-3 inline-flex items-center gap-1 bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-sm font-bold">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  Confidential
+                </span>
+              )}
+            </span>
             <span className="text-lg text-muted-foreground font-semibold">Total Pages: <span className="text-black font-bold">{totalPages}</span></span>
           </div>
 
@@ -231,11 +263,7 @@ export function JobConfirmationScreen() {
             Cancel
           </button>
           <button
-            onClick={() => {
-              updateStatusMutation.mutate({ printId, status: 'printing' }, {
-                onSuccess: () => setLocation(`/printing/${printId}`)
-              });
-            }}
+            onClick={handleRelease}
             disabled={updateStatusMutation.isPending}
             className="flex-[2] touch-target rounded-full bg-primary text-black text-2xl font-bold hover:scale-[1.02] active:scale-95 transition-all kiosk-shadow flex items-center justify-center gap-2 py-5 disabled:opacity-50"
           >
@@ -244,6 +272,50 @@ export function JobConfirmationScreen() {
           </button>
         </div>
       </div>
+
+      {/* Confidential Verification Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-8">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              </div>
+              <h2 className="text-3xl font-bold mb-2">Confidential Job</h2>
+              <p className="text-muted-foreground text-lg">Please verify your identity to release this document.</p>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <input
+                  type="text"
+                  placeholder="Enter Faculty ID"
+                  value={facultyIdInput}
+                  onChange={(e) => setFacultyIdInput(e.target.value)}
+                  className={`w-full text-center text-2xl p-4 rounded-xl border-2 outline-none ${authError ? 'border-red-500 bg-red-50' : 'border-gray-200 focus:border-primary'}`}
+                  autoFocus
+                />
+                {authError && <p className="text-red-500 font-bold text-center mt-2">{authError}</p>}
+              </div>
+              
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => { setShowAuthModal(false); setFacultyIdInput(""); setAuthError(""); }}
+                  className="flex-1 py-4 text-xl font-bold bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAuthSubmit}
+                  className="flex-1 py-4 text-xl font-bold bg-primary text-black rounded-xl"
+                >
+                  Verify & Print
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </PageTransition>
   );
 }

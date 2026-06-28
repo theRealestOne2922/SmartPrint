@@ -8,7 +8,7 @@ import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 
 export type UploadResponse = { filePath: string; fileName: string; pageCount: number };
-export type CreateJobInput = { studentName?: string; fileName: string; filePath: string; pageCount: number; colorMode: 'bw' | 'color'; copies: number; duplex: boolean; orientation: 'portrait' | 'landscape'; paperSize: 'a4' | 'a3'; pageRange: string; jobId?: string };
+export type CreateJobInput = { studentName?: string; fileName: string; filePath: string; pageCount: number; colorMode: 'bw' | 'color'; copies: number; duplex: boolean; orientation: 'portrait' | 'landscape'; paperSize: 'a4' | 'a3'; pageRange: string; jobId?: string; confidential?: boolean; teacherEmail?: string };
 export type PrintJobResponse = any;
 
 /**
@@ -170,6 +170,7 @@ export function useCreatePrintJob() {
       const price = data.pageCount * data.copies * pricePerPage;
 
       const teacherEmpId = localStorage.getItem("teacherId");
+      const teacherEmail = localStorage.getItem("teacherEmail");
 
       // Create job via Express API (was: direct Supabase insert)
       const res = await fetch(`${API_BASE}/api/print-jobs`, {
@@ -179,6 +180,7 @@ export function useCreatePrintJob() {
           jobId,
           studentName: localStorage.getItem("teacherName") || data.studentName || "Student",
           teacherEmpId: teacherEmpId || null,
+          teacherEmail: teacherEmail || null,
           fileName: data.fileName,
           filePath: data.filePath,
           pageCount: data.pageCount,
@@ -188,6 +190,7 @@ export function useCreatePrintJob() {
           orientation: data.orientation || 'portrait',
           paperSize: data.paperSize || 'a4',
           pageRange: data.pageRange,
+          confidential: data.confidential || false,
           price,
         }),
       });
@@ -198,27 +201,6 @@ export function useCreatePrintJob() {
       }
 
       const job = await res.json();
-
-      // Send Email OTP via formsubmit.co API if it's a teacher
-      if (teacherEmpId) {
-        try {
-          // Note: The very first time this runs, FormSubmit will send an activation email to realme11421@gmail.com.
-          // The user MUST click the activation link in that email before subsequent emails will be delivered.
-          fetch("https://formsubmit.co/ajax/realme11421@gmail.com", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "application/json"
-            },
-            body: JSON.stringify({
-              subject: `SmartPrint OTP: ${job.jobId}`,
-              message: `Your print job for "${job.fileName}" was successfully uploaded!\n\nYour 6-digit Print PIN is: ${job.jobId}\n\nPlease enter this PIN at the SmartPrint kiosk to print your document.`
-            })
-          }).catch(console.error);
-        } catch (e) {
-          console.error("Email send failed", e);
-        }
-      }
 
       return job;
     },

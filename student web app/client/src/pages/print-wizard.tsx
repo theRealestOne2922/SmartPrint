@@ -231,6 +231,11 @@ export default function PrintWizard() {
   const { toast } = useToast();
 
   const [maxFiles, setMaxFiles] = useState(5);
+  const [confidential, setConfidential] = useState(false);
+  const [showVolumeWarning, setShowVolumeWarning] = useState(false);
+  const [totalCalculatedCopies, setTotalCalculatedCopies] = useState(0);
+
+  const isTeacher = typeof window !== 'undefined' ? !!localStorage.getItem("teacherId") : false;
 
   useEffect(() => {
     async function fetchSettings() {
@@ -577,10 +582,9 @@ export default function PrintWizard() {
 
   // calculateBillablePages removed for Teacher Edition
 
-  const handleCreateJob = async () => {
-    if (fileDetailsList.length === 0) return;
-
+  const executeJobCreation = async () => {
     setIsBatchSubmitting(true);
+    setShowVolumeWarning(false);
     const createdJobs: any[] = [];
     const newRecentPrints: RecentPrint[] = [];
 
@@ -603,7 +607,8 @@ export default function PrintWizard() {
           duplex: settings.duplex,
           orientation: settings.orientation,
           paperSize: settings.paperSize,
-          pageRange: computePageRange(settings, fd.pageCount)
+          pageRange: computePageRange(settings, fd.pageCount),
+          confidential: confidential,
         });
         createdJobs.push(data);
       }
@@ -630,6 +635,26 @@ export default function PrintWizard() {
     }
   };
 
+  const handleCreateJob = async () => {
+    if (fileDetailsList.length === 0) return;
+
+    // Check for high volume
+    let totalCopies = 0;
+    for (let index = 0; index < fileDetailsList.length; index++) {
+      const fd = fileDetailsList[index];
+      const settings = getSettingsFor(index);
+      totalCopies += (fd.pageCount * settings.copies);
+    }
+
+    if (totalCopies > 50) {
+      setTotalCalculatedCopies(totalCopies);
+      setShowVolumeWarning(true);
+      return;
+    }
+
+    await executeJobCreation();
+  };
+
   // Pricing logic removed
 
   return (
@@ -639,13 +664,42 @@ export default function PrintWizard() {
         {/* Password Modal */}
         <PasswordModal
           isOpen={showPasswordModal}
-          fileName={encryptedFile?.name || ""}
+          onClose={handlePasswordCancel}
           onSubmit={handlePasswordSubmit}
-          onCancel={handlePasswordCancel}
           isLoading={decryptLoading}
           error={decryptError}
+          fileName={encryptedFile?.name || ""}
+          type={encryptionType}
         />
 
+        {/* High Volume Warning Modal */}
+        {showVolumeWarning && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-card w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden"
+            >
+              <div className="p-8 text-center space-y-4">
+                <div className="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                </div>
+                <h2 className="text-2xl font-bold">High Volume Print</h2>
+                <p className="text-muted-foreground">
+                  Your print job contains <strong>{totalCalculatedCopies}</strong> total pages. Are you sure you want to continue?
+                </p>
+                <div className="flex gap-3 pt-4">
+                  <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setShowVolumeWarning(false)}>
+                    Cancel
+                  </Button>
+                  <Button className="flex-1 rounded-xl" onClick={executeJobCreation}>
+                    Yes, Print
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
         {/* Simple Stepper */}
         <div className="flex items-center justify-center mb-10">
           <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold text-sm ${step >= 1 ? 'bg-primary text-black' : 'bg-secondary text-muted-foreground'}`}>
@@ -1076,6 +1130,22 @@ export default function PrintWizard() {
                       </button>
                     </div>
                   </div>
+
+                  {isTeacher && (
+                    <div className="mt-8 border-t border-border pt-8">
+                      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        Security Options
+                      </h3>
+                      <div className="flex items-center justify-between bg-card border border-border p-5 rounded-2xl shadow-sm">
+                        <div>
+                          <p className="font-bold">Confidential Print Job</p>
+                          <p className="text-sm text-muted-foreground mt-1">Requires Faculty ID verification at the Kiosk. Files are encrypted on the server.</p>
+                        </div>
+                        <Switch checked={confidential} onCheckedChange={setConfidential} />
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <h3 className="text-lg font-semibold mb-4">Global Copies</h3>
