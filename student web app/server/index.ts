@@ -104,6 +104,7 @@ async function seedDefaultData() {
         empId: '1001',
         name: 'Teacher Name',
         email: 'realme11421@gmail.com',
+        password: 'password123',
         department: 'CS',
       });
       console.log('[seed] ✅ Created default teacher');

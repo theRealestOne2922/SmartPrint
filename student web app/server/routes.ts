@@ -418,9 +418,15 @@ export async function registerRoutes(
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       
       // Save OTP to teacher document, expires in 15 minutes
-      teacher.resetPasswordOtp = otp;
-      teacher.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
-      await teacher.save();
+      await Teacher.updateOne(
+        { _id: teacher._id },
+        {
+          $set: {
+            resetPasswordOtp: otp,
+            resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
+          },
+        }
+      );
 
       // Send the email
       const { sendPasswordResetEmail } = await import('./emailService');
@@ -474,14 +480,14 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid or expired OTP" });
       }
 
-      // Update password
-      teacher.password = newPassword; // Using plaintext for prototype; bcrypt in prod
-      
-      // Clear OTP fields
-      teacher.resetPasswordOtp = undefined;
-      teacher.resetPasswordExpires = undefined;
-      
-      await teacher.save();
+      // Clear OTP fields and update password
+      await Teacher.updateOne(
+        { _id: teacher._id },
+        {
+          $set: { password: newPassword },
+          $unset: { resetPasswordOtp: 1, resetPasswordExpires: 1 }
+        }
+      );
 
       res.json({ success: true, message: "Password has been reset successfully" });
     } catch (err: any) {
