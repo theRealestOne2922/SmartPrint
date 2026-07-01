@@ -15,6 +15,8 @@ export interface IPrintJob {
   pageRange: string;
   price: number;
   status: string;
+  confidential?: boolean;
+  encrypted?: boolean;
   stripeSessionId: string | null;
   createdAt: Date;
   updatedAt: Date;

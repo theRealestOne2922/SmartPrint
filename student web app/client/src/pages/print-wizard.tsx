@@ -664,12 +664,11 @@ export default function PrintWizard() {
         {/* Password Modal */}
         <PasswordModal
           isOpen={showPasswordModal}
-          onClose={handlePasswordCancel}
+          onCancel={handlePasswordCancel}
           onSubmit={handlePasswordSubmit}
           isLoading={decryptLoading}
           error={decryptError}
           fileName={encryptedFile?.name || ""}
-          type={encryptionType}
         />
 
         {/* High Volume Warning Modal */}

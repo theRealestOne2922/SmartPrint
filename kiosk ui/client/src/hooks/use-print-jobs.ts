@@ -21,6 +21,9 @@ function mapJob(d: any) {
     paperSize: d.paperSize || 'a3',
     price: d.price,
     status: d.status,
+    confidential: d.confidential,
+    encrypted: d.encrypted,
+    teacherEmpId: d.teacherEmpId,
     createdAt: d.createdAt,
   };
 }

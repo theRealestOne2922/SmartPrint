@@ -24,7 +24,6 @@ export function RealtimeStatusHandler() {
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log("[WebSocket] Connected — listening for job updates");
         reconnectAttempts = 0;
       };
 
@@ -33,8 +32,6 @@ export function RealtimeStatusHandler() {
           const data = JSON.parse(event.data);
 
           if (data.type === 'JOB_UPDATE' && data.job) {
-            console.log(`[WebSocket] Job update: ${data.job.jobId} → ${data.job.status}`);
-
             // Invalidate relevant React Query caches so components re-fetch
             queryClient.invalidateQueries({ queryKey: ['print-job', data.job.jobId] });
             queryClient.invalidateQueries({ queryKey: ['confirmed-jobs'] });
@@ -45,8 +42,6 @@ export function RealtimeStatusHandler() {
       };
 
       ws.onclose = (event) => {
-        console.log(`[WebSocket] Disconnected (code: ${event.code}). Reconnecting...`);
-
         // Exponential backoff reconnect
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
         reconnectAttempts++;

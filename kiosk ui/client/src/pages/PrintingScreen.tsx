@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation, useParams } from "wouter";
 import { usePrintJob, useUpdatePrintJobStatus } from "@/hooks/use-print-jobs";
 import { PageTransition } from "@/components/PageTransition";
@@ -8,6 +8,7 @@ export function PrintingScreen() {
   const params = useParams<{ printId: string }>();
   const [, setLocation] = useLocation();
   const printId = params?.printId || "";
+  const hasTriggered = useRef(false);
 
   // Poll rapidly during printing
   const { data: jobs } = usePrintJob(printId, 1500);
@@ -20,12 +21,12 @@ export function PrintingScreen() {
     if (jobs && jobs.length > 0 && !updateStatus.isPending) {
       // If ANY job in the batch needs to be triggered, we update the whole batch
       const needsTrigger = jobs.some(j => j.status === 'payment_confirmed' || j.status === 'uploaded');
-      if (needsTrigger) {
-        console.log(`[KIOSK] Triggering print for batch ${printId}...`);
+      if (needsTrigger && !hasTriggered.current) {
+        hasTriggered.current = true;
         updateStatus.mutate({ printId, status: 'printing' });
       }
     }
-  }, [jobs, printId]);
+  }, [jobs, printId, updateStatus]);
 
   useEffect(() => {
     if (jobs && jobs.length > 0) {
