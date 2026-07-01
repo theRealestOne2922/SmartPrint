@@ -39,6 +39,15 @@ async function buildAll() {
   console.log("building client...");
   await viteBuild();
 
+  console.log("copying kiosk-app...");
+  try {
+    const { cp } = await import("fs/promises");
+    await cp("../kiosk ui/dist/public", "dist/public/kiosk-app", { recursive: true });
+    console.log("kiosk-app copied successfully.");
+  } catch (err: any) {
+    console.warn("Could not copy kiosk-app (maybe it's not built yet?):", err.message);
+  }
+
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
   const allDeps = [
