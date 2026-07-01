@@ -401,6 +401,30 @@ export async function registerRoutes(
     }
   });
 
+  app.put("/api/teacher/profile", async (req, res) => {
+    try {
+      const { email, name } = req.body;
+      if (!email || !name) {
+        return res.status(400).json({ message: "Email and name are required" });
+      }
+
+      const teacher = await Teacher.findOneAndUpdate(
+        { email },
+        { name },
+        { new: true }
+      );
+
+      if (!teacher) {
+        return res.status(404).json({ message: "Teacher not found" });
+      }
+
+      res.json({ success: true, name: teacher.name });
+    } catch (err: any) {
+      console.error("Teacher profile update error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.post("/api/teacher/forgot-password", async (req, res) => {
     try {
       const { email } = req.body;

@@ -69,26 +69,47 @@ export function Layout({ children }: { children: ReactNode }) {
           {showMenu && (
             <div className="absolute right-0 mt-2 w-56 bg-card rounded-2xl shadow-lg border border-border/50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50">
               {loggedInUser ? (
-                <button
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    localStorage.removeItem("adminAuth");
-                    localStorage.removeItem("teacherId");
-                    localStorage.removeItem("teacherName");
-                    setLoggedInUser(null);
-                    setShowMenu(false);
-                    setLocation("/");
-                  }}
-                  className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-destructive/10 hover:text-destructive transition-colors text-sm font-medium outline-none group"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-destructive/10 text-destructive group-hover:bg-destructive/20 flex items-center justify-center transition-colors">
-                    <LogOut className="w-5 h-5" />
-                  </div>
-                  <div className="flex flex-col text-left">
-                    <div className="font-semibold text-foreground group-hover:text-destructive">Log Out</div>
-                    <div className="text-xs text-muted-foreground group-hover:text-destructive/70">End session</div>
-                  </div>
-                </button>
+                <>
+                  {loggedInUser !== "Admin" && (
+                    <button
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        setLocation("/teacher-profile");
+                        setShowMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-primary/10 hover:text-primary transition-colors text-sm font-medium outline-none group"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary group-hover:bg-primary/20 flex items-center justify-center transition-colors">
+                        <User className="w-5 h-5" />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <div className="font-semibold text-foreground group-hover:text-primary">Profile</div>
+                        <div className="text-xs text-muted-foreground group-hover:text-primary/70">View details</div>
+                      </div>
+                    </button>
+                  )}
+                  {loggedInUser !== "Admin" && <div className="h-px bg-border/50" />}
+                  <button
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      localStorage.removeItem("adminAuth");
+                      localStorage.removeItem("teacherId");
+                      localStorage.removeItem("teacherName");
+                      setLoggedInUser(null);
+                      setShowMenu(false);
+                      setLocation("/");
+                    }}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-destructive/10 hover:text-destructive transition-colors text-sm font-medium outline-none group"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-destructive/10 text-destructive group-hover:bg-destructive/20 flex items-center justify-center transition-colors">
+                      <LogOut className="w-5 h-5" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <div className="font-semibold text-foreground group-hover:text-destructive">Log Out</div>
+                      <div className="text-xs text-muted-foreground group-hover:text-destructive/70">End session</div>
+                    </div>
+                  </button>
+                </>
               ) : (
                 <>
                   <button
