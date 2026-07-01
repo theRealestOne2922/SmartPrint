@@ -9,16 +9,18 @@ let transporter: nodemailer.Transporter | null = null;
 if (smtpUser && smtpPass) {
   transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
+    port: 465,
+    secure: true,
     auth: {
+      type: 'Login',
       user: smtpUser,
       pass: smtpPass,
     },
     tls: {
-      ciphers: 'SSLv3',
       rejectUnauthorized: false,
     },
+    logger: false,
+    debug: false,
   });
   // Verify the connection on startup
   transporter.verify()
