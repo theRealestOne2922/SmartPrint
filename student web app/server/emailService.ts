@@ -1,34 +1,19 @@
-// ─── Email Service — Nodemailer + Gmail SMTP ───
-import nodemailer from 'nodemailer';
+// ─── Email Service — Resend API (reliable from any server) ───
+import { Resend } from 'resend';
 
-const smtpUser = process.env.SMTP_USER || '';
-const smtpPass = process.env.SMTP_PASS || '';
+const resendApiKey = process.env.RESEND_API_KEY || '';
 
-let transporter: nodemailer.Transporter | null = null;
+let resend: Resend | null = null;
 
-if (smtpUser && smtpPass) {
-  transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: {
-      type: 'Login',
-      user: smtpUser,
-      pass: smtpPass,
-    },
-    tls: {
-      rejectUnauthorized: false,
-    },
-    logger: false,
-    debug: false,
-  });
-  // Verify the connection on startup
-  transporter.verify()
-    .then(() => console.log(`📧 Email service verified & ready (${smtpUser})`))
-    .catch((err: any) => console.error(`📧 Email service verification FAILED:`, err.message));
+if (resendApiKey) {
+  resend = new Resend(resendApiKey);
+  console.log(`📧 Email service configured (Resend API)`);
 } else {
-  console.warn('⚠️  SMTP_USER / SMTP_PASS not set — email sending disabled');
+  console.warn('⚠️  RESEND_API_KEY not set — email sending disabled');
 }
+
+// Resend free tier sends from onboarding@resend.dev
+const FROM_EMAIL = process.env.RESEND_FROM || 'SmartPrint VIT <onboarding@resend.dev>';
 
 export async function sendOtpEmail(
   toEmail: string,
@@ -36,15 +21,15 @@ export async function sendOtpEmail(
   jobId: string,
   fileName: string,
 ): Promise<boolean> {
-  if (!transporter) {
+  if (!resend) {
     console.warn('Email not configured — skipping OTP email');
     return false;
   }
 
   try {
-    await transporter.sendMail({
-      from: `"SmartPrint VIT" <${smtpUser}>`,
-      to: toEmail,
+    const { error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [toEmail],
       subject: `SmartPrint — Your Print Code: ${jobId}`,
       html: `
         <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #fafafa; border-radius: 16px;">
@@ -79,6 +64,11 @@ export async function sendOtpEmail(
       `,
     });
 
+    if (error) {
+      console.error(`📧 Resend error sending to ${toEmail}:`, error.message);
+      return false;
+    }
+
     console.log(`📧 OTP email sent to ${toEmail} for job ${jobId}`);
     return true;
   } catch (err: any) {
@@ -92,15 +82,15 @@ export async function sendPasswordResetEmail(
   teacherName: string,
   otp: string,
 ): Promise<boolean> {
-  if (!transporter) {
+  if (!resend) {
     console.warn('Email not configured — skipping password reset email');
     return false;
   }
 
   try {
-    await transporter.sendMail({
-      from: `"SmartPrint VIT" <${smtpUser}>`,
-      to: toEmail,
+    const { error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [toEmail],
       subject: `SmartPrint — Password Reset Code`,
       html: `
         <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #fafafa; border-radius: 16px;">
@@ -134,6 +124,11 @@ export async function sendPasswordResetEmail(
         </div>
       `,
     });
+
+    if (error) {
+      console.error(`📧 Resend error sending reset email to ${toEmail}:`, error.message);
+      return false;
+    }
 
     console.log(`📧 Password reset email sent to ${toEmail}`);
     return true;
