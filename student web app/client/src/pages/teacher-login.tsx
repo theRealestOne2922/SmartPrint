@@ -66,6 +66,12 @@ export default function TeacherLogin() {
         <div className="absolute bottom-0 right-0 w-[400px] h-[400px] rounded-full bg-primary/3 blur-[100px]" />
       </div>
 
+      {/* Back to Home Button */}
+      <a href="/" className="absolute top-6 left-6 text-zinc-500 hover:text-primary transition-colors flex items-center gap-2 font-medium text-sm z-50 bg-white/50 px-4 py-2 rounded-full shadow-sm backdrop-blur-sm border border-zinc-200/50">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        Back to Home
+      </a>
+
       {/* Top accent bar */}
       <motion.div
         className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-primary to-transparent"
