@@ -8,13 +8,18 @@ let transporter: nodemailer.Transporter | null = null;
 
 if (smtpUser && smtpPass) {
   transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
     auth: {
       user: smtpUser,
       pass: smtpPass,
     },
   });
-  console.log(`📧 Email service configured (${smtpUser})`);
+  // Verify the connection on startup
+  transporter.verify()
+    .then(() => console.log(`📧 Email service verified & ready (${smtpUser})`))
+    .catch((err: any) => console.error(`📧 Email service verification FAILED:`, err.message));
 } else {
   console.warn('⚠️  SMTP_USER / SMTP_PASS not set — email sending disabled');
 }
