@@ -22,13 +22,14 @@ export function JobConfirmationScreen() {
 
   // Confidential verification state
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [facultyIdInput, setFacultyIdInput] = useState("");
   const [authError, setAuthError] = useState("");
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!scrollRef.current) return;
     setIsPointerDown(true);
-    setIsDragging(false); // don't drag until they move
+    setIsDragging(false);
     setStartY(e.pageY - scrollRef.current.offsetTop);
     setScrollTop(scrollRef.current.scrollTop);
   };
@@ -37,25 +38,18 @@ export function JobConfirmationScreen() {
     if (!isPointerDown || !scrollRef.current) return;
     const y = e.pageY - scrollRef.current.offsetTop;
     const walk = (y - startY);
-    
-    // If they moved more than 5px, we consider it a drag
-    if (Math.abs(walk) > 5) {
-      setIsDragging(true);
-    }
-    
+    if (Math.abs(walk) > 5) setIsDragging(true);
     if (isDragging) {
       e.preventDefault(); 
       scrollRef.current.scrollTop = scrollTop - (walk * 1.5);
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handlePointerUp = () => {
     setIsPointerDown(false);
-    // Delay resetting isDragging so the click event doesn't fire immediately
     setTimeout(() => setIsDragging(false), 50);
   };
 
-  // Auto route based on state to prevent returning to confirmation for an already paid job
   useEffect(() => {
     if (jobs && jobs.length > 0) {
       const anyCompleted = jobs.some(j => j.status === 'completed');
@@ -68,9 +62,15 @@ export function JobConfirmationScreen() {
         setLocation(`/printing/${printId}`);
       } else if (allFailed) {
         setLocation(`/error`);
+      } else {
+        // Enforce confidential check immediately on load
+        const confidential = jobs.some(job => job.confidential);
+        if (confidential && !isAuthenticated && !showAuthModal) {
+          setShowAuthModal(true);
+        }
       }
     }
-  }, [jobs, printId, setLocation]);
+  }, [jobs, printId, setLocation, isAuthenticated, showAuthModal]);
 
   if (isLoading) {
     return (
@@ -101,16 +101,11 @@ export function JobConfirmationScreen() {
     );
   }
 
-
   const totalPages = jobs.reduce((sum, job) => sum + (job.pageCount * job.copies), 0);
   const isMultiFile = jobs.length > 1;
   const isConfidential = jobs.some(job => job.confidential);
 
   const handleRelease = () => {
-    if (isConfidential) {
-      setShowAuthModal(true);
-      return;
-    }
     executeRelease();
   };
 
@@ -124,8 +119,8 @@ export function JobConfirmationScreen() {
     const requiredEmpId = jobs.find(j => j.confidential)?.teacherEmpId;
     if (facultyIdInput.trim() === requiredEmpId) {
       setAuthError("");
+      setIsAuthenticated(true);
       setShowAuthModal(false);
-      executeRelease();
     } else {
       setAuthError("Invalid Faculty ID. Please try again.");
     }
@@ -275,14 +270,14 @@ export function JobConfirmationScreen() {
 
       {/* Confidential Verification Modal */}
       {showAuthModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xl p-4">
+          <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-8 relative">
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               </div>
               <h2 className="text-3xl font-bold mb-2">Confidential Job</h2>
-              <p className="text-muted-foreground text-lg">Please verify your identity to release this document.</p>
+              <p className="text-muted-foreground text-lg">Please verify your identity to access this document.</p>
             </div>
             
             <div className="space-y-4">
@@ -300,7 +295,7 @@ export function JobConfirmationScreen() {
               
               <div className="flex gap-3 pt-4">
                 <button
-                  onClick={() => { setShowAuthModal(false); setFacultyIdInput(""); setAuthError(""); }}
+                  onClick={() => setLocation("/")}
                   className="flex-1 py-4 text-xl font-bold bg-gray-100 rounded-xl"
                 >
                   Cancel
@@ -309,7 +304,7 @@ export function JobConfirmationScreen() {
                   onClick={handleAuthSubmit}
                   className="flex-1 py-4 text-xl font-bold bg-primary text-black rounded-xl"
                 >
-                  Verify & Print
+                  Verify Access
                 </button>
               </div>
             </div>
