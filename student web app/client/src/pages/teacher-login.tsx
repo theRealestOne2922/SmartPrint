@@ -131,18 +131,18 @@ export default function TeacherLogin() {
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 0.45 }}
             >
-              {/* Username / Emp ID */}
+              {/* Email */}
               <div className="space-y-2">
                 <Label
                   htmlFor="username"
                   className="text-zinc-700 text-sm font-medium"
                 >
-                  Username / Emp ID
+                  Email Address
                 </Label>
                 <Input
                   id="username"
-                  type="text"
-                  placeholder="Enter your Employee ID"
+                  type="email"
+                  placeholder="Enter your email address"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
