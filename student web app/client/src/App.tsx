@@ -33,7 +33,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/print" component={PrintWizard} />
       <Route path="/pay/:jobId" component={JobStatus} />
-      <Route path="/status/:jobId" component={JobStatus} />
+      <Route path="/status" component={JobStatus} />
       <Route path="/batch-status" component={BatchStatus} />
       <Route path="/teacher-login" component={TeacherLogin} />
       <Route path="/teacher-register" component={TeacherRegister} />

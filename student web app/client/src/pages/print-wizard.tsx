@@ -627,7 +627,8 @@ export default function PrintWizard() {
 
       setIsBatchSubmitting(false);
       // Navigate to unified status page
-      setLocation(`/status/${batchJobId}`);
+      sessionStorage.setItem("current_job_id", batchJobId);
+      setLocation(`/status`);
 
     } catch (err: any) {
       toast({ title: "Could not create job", description: err.message, variant: "destructive" });
@@ -824,22 +825,27 @@ export default function PrintWizard() {
                     <h3 className="text-lg font-semibold mb-4 text-left">Recent Prints</h3>
                     <div className="space-y-3">
                       {recentPrints.map((print) => (
-                        <Link key={print.jobId} href={`/status/${print.jobId}`}>
-                          <div className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between hover:border-primary/50 transition-colors cursor-pointer group shadow-sm">
-                            <div className="flex items-center gap-3 overflow-hidden">
-                              <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center shrink-0">
-                                <FileText className="w-5 h-5" />
-                              </div>
-                              <div className="min-w-0">
-                                <p className="font-medium text-sm truncate">{print.fileName}</p>
-                                <p className="text-xs text-muted-foreground">{new Date(print.timestamp).toLocaleDateString()}</p>
-                              </div>
+                        <div 
+                          key={print.jobId} 
+                          onClick={() => {
+                            sessionStorage.setItem("current_job_id", print.jobId);
+                            setLocation("/status");
+                          }}
+                          className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between hover:border-primary/50 transition-colors cursor-pointer group shadow-sm"
+                        >
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center shrink-0">
+                              <FileText className="w-5 h-5" />
                             </div>
-                            <div className="text-xs font-bold bg-secondary px-2 py-1 rounded-md text-muted-foreground group-hover:bg-primary group-hover:text-black transition-colors">
-                              {print.jobId}
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm truncate">{print.fileName}</p>
+                              <p className="text-xs text-muted-foreground">{new Date(print.timestamp).toLocaleDateString()}</p>
                             </div>
                           </div>
-                        </Link>
+                          <div className="text-xs font-bold bg-secondary px-2 py-1 rounded-md text-muted-foreground group-hover:bg-primary group-hover:text-black transition-colors">
+                            {print.jobId}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>

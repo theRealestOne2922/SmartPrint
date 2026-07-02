@@ -1,4 +1,5 @@
-import { useRoute } from "wouter";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { usePrintJob } from "@/hooks/use-print";
 import { Button } from "@/components/button";
@@ -8,9 +9,18 @@ import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
 export default function JobStatus() {
-  const [, params] = useRoute("/status/:jobId");
-  const jobId = params?.jobId || "";
+  const [, setLocation] = useLocation();
+  const [jobId, setJobId] = useState<string | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const storedJobId = sessionStorage.getItem("current_job_id");
+    if (storedJobId) {
+      setJobId(storedJobId);
+    } else {
+      setLocation("/print");
+    }
+  }, [setLocation]);
 
   const { data: jobs, isLoading, isError } = usePrintJob(jobId);
   const teacherEmail = typeof window !== 'undefined' ? localStorage.getItem("teacherEmail") : null;
