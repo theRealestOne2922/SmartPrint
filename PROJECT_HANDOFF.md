@@ -213,18 +213,69 @@ pm2 restart print-agent
 - Rate-limited uploads (5/hour/IP)
 - File type validation on server
 - Automated data purging (24h default retention)
+- **Confidential Print Jobs:** Requires Faculty ID verification at the Kiosk before revealing document details or releasing the print.
+- **URL Security:** 6-digit print codes are hidden from URLs and passed via secure session storage to prevent shoulder-surfing.
+- **High Volume Warning:** Users are warned before proceeding if a print job contains more than 50 copies.
 
 ---
 
-## 📦 What's in the Backup ZIP
+## 📦 What's in the Handoff ZIP
 
-This ZIP contains the **entire `d:\smartprintvit\` directory** including:
-- ✅ All source code (student web app, kiosk ui, pi-print-agent)
-- ✅ All `.env` files (normally gitignored)
-- ✅ `.env.production` (build-time vars)
+This ZIP contains the **entire SmartPrint codebase** prepared for the Software Development Cell (SDC):
+- ✅ All source code (`student web app`, `kiosk ui`, `pi-print-agent`)
 - ✅ `deploy-vit.ps1` (deployment script)
-- ✅ `install-pi-agent.sh` (Raspberry Pi setup)
-- ✅ `firebase.json` and `.firebaserc` configs
-- ❌ `node_modules/` excluded (run `npm install` after extracting)
-- ❌ `dist/` excluded (run `npm run build` to regenerate)
-- ❌ SSH key NOT included (copy `ssh-key-2026-06-21.key` separately)
+- ✅ `install-pi-agent.sh` (Raspberry Pi setup script)
+- ✅ `smartprint_nginx.conf` (Nginx configuration reference)
+- ❌ `node_modules/` excluded
+- ❌ `dist/` excluded
+- ❌ `.env` files excluded for security. (See below for environment variable setup)
+- ❌ `.git/` excluded
+
+---
+
+## 🏢 VTOP Implementation & Deployment Guide for SDC
+
+When migrating SmartPrint to VTOP infrastructure, the SDC team will need to provision their own environments. Since the `.env` files containing our API keys and database credentials have been stripped for security, here is exactly what SDC needs to configure:
+
+### 1. Environment Variables Setup
+You must create `.env` files in three locations:
+
+**A. `student web app/.env`**
+```env
+MONGODB_URI=mongodb://<vtop-db-user>:<password>@<vtop-mongo-host>:27017/smartprint
+BREVO_API_KEY=<your-brevo-or-smtp-api-key>
+```
+*(Also create `student web app/.env.production` containing `VITE_API_BASE=https://<your-vtop-backend-domain>`)*
+
+**B. `kiosk ui/.env`**
+```env
+MONGODB_URI=mongodb://<vtop-db-user>:<password>@<vtop-mongo-host>:27017/smartprint
+PORT=5001
+```
+
+**C. `pi-print-agent/.env`**
+```env
+MONGODB_URI=mongodb://<vtop-db-user>:<password>@<vtop-mongo-host>:27017/smartprint
+```
+
+### 2. Network Restrictions
+As requested, the website must only work on the VIT Network (cannot be accessed from outside network or mobile data).
+- **Implementation:** SDC should configure the Nginx Reverse Proxy (or VTOP firewall) to only allow inbound connections from the campus IP subnets (e.g., `allow 10.0.0.0/8; deny all;`).
+
+### 3. Database Migration
+- Deploy a MongoDB instance within the VTOP intranet.
+- Update the `MONGODB_URI` across all apps. Mongoose schemas will automatically initialize the required collections (`printjobs`, `admins`, `teachers`, `systemsettings`) on the first run.
+- The server will automatically seed the default admin (`vit admin` / `admin123`) on startup.
+
+### 4. Build and Run
+```bash
+# Backend (PM2)
+cd "student web app"
+npm install
+npm run build
+pm2 start dist/index.cjs --name smartprint
+
+# Frontend (Firebase or internal static hosting)
+# Run `npm run build` in 'student web app'. It will automatically build the kiosk UI as well.
+# Serve the resulting `dist/public` folder using Nginx or Firebase Hosting.
+```
