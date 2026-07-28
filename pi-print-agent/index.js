@@ -30,6 +30,27 @@ if (!mongoUri) {
     process.exit(1);
 }
 
+// ─── Confidential document decryption (envelope: per-file DEK wrapped by MASTER_KEY) ───
+// Mirrors "student web app/server/security.ts" encryptFileEnvelope. The DEK is never
+// derived from job data (unlike the old sha256(teacherEmpId + jobId) scheme) — it only
+// exists wrapped in the job document, unwrappable solely with this agent's MASTER_KEY.
+const MASTER_KEY_HEX = process.env.MASTER_KEY || '';
+const MASTER_KEY = MASTER_KEY_HEX.length === 64 ? Buffer.from(MASTER_KEY_HEX, 'hex') : null;
+if (!MASTER_KEY) {
+    console.error('⚠️  MASTER_KEY missing/invalid in .env — confidential jobs will fail to print!');
+}
+
+function decryptFileEnvelope(ciphertext, fields) {
+    if (!MASTER_KEY) throw new Error('MASTER_KEY not configured');
+    const wrapDecipher = crypto.createDecipheriv('aes-256-gcm', MASTER_KEY, Buffer.from(fields.wrappedKeyIv, 'hex'));
+    wrapDecipher.setAuthTag(Buffer.from(fields.wrappedKeyAuthTag, 'hex'));
+    const dek = Buffer.concat([wrapDecipher.update(Buffer.from(fields.wrappedKey, 'hex')), wrapDecipher.final()]);
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', dek, Buffer.from(fields.encIv, 'hex'));
+    decipher.setAuthTag(Buffer.from(fields.encAuthTag, 'hex'));
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
 // Extensions that need conversion to PDF before printing.
 // IPP Everywhere driver only accepts PDF — images and Office docs must be converted.
 const NEEDS_CONVERSION = new Set([
@@ -154,17 +175,20 @@ async function processJob(job) {
         console.log(`[JOB ${job.jobId}] Downloaded: ${(dlStat.size / 1024).toFixed(1)} KB`);
 
         // 1.5 Decrypt if encrypted
-        if (job.encrypted && job.teacherEmpId) {
+        if (job.encrypted) {
+            if (!job.wrappedKey || !job.encIv || !job.encAuthTag) {
+                throw new Error('Job is marked encrypted but is missing envelope metadata — refusing to print.');
+            }
             console.log(`[JOB ${job.jobId}] 🔒 File is encrypted. Decrypting...`);
             const fileBuffer = await fs.readFile(tempFilePath);
-            
-            const iv = fileBuffer.slice(0, 16);
-            const encryptedData = fileBuffer.slice(16);
-            
-            const key = crypto.createHash('sha256').update(job.teacherEmpId + job.jobId).digest();
-            const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-            
-            const decryptedBuffer = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+
+            const decryptedBuffer = decryptFileEnvelope(fileBuffer, {
+                encIv: job.encIv,
+                encAuthTag: job.encAuthTag,
+                wrappedKey: job.wrappedKey,
+                wrappedKeyIv: job.wrappedKeyIv,
+                wrappedKeyAuthTag: job.wrappedKeyAuthTag,
+            });
             await fs.writeFile(tempFilePath, decryptedBuffer);
             console.log(`[JOB ${job.jobId}] 🔓 Decryption successful.`);
         }

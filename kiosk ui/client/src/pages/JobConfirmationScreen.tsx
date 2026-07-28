@@ -1,5 +1,5 @@
 import { useLocation, useParams } from "wouter";
-import { usePrintJob, useUpdatePrintJobStatus, useUpdatePrintJobDetails, useDeletePrintJobItem } from "@/hooks/use-print-jobs";
+import { usePrintJob, useUpdatePrintJobStatus, useUpdatePrintJobDetails, useDeletePrintJobItem, useVerifyFacultyAccess } from "@/hooks/use-print-jobs";
 import { PageTransition } from "@/components/PageTransition";
 import { FileText, FileSearch, Loader2, ArrowLeft, CheckCircle2, Trash2, Plus, Minus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +13,7 @@ export function JobConfirmationScreen() {
   const updateStatusMutation = useUpdatePrintJobStatus();
   const updateDetailsMutation = useUpdatePrintJobDetails();
   const deleteItemMutation = useDeletePrintJobItem();
+  const verifyFacultyMutation = useVerifyFacultyAccess();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -25,6 +26,7 @@ export function JobConfirmationScreen() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [facultyIdInput, setFacultyIdInput] = useState("");
   const [authError, setAuthError] = useState("");
+  const [releaseToken, setReleaseToken] = useState<string | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!scrollRef.current) return;
@@ -110,20 +112,23 @@ export function JobConfirmationScreen() {
   };
 
   const executeRelease = () => {
-    updateStatusMutation.mutate({ printId, status: 'printing' }, {
+    updateStatusMutation.mutate({ printId, status: 'printing', releaseToken: releaseToken || undefined }, {
       onSuccess: () => setLocation(`/printing/${printId}`)
     });
   };
 
   const handleAuthSubmit = () => {
-    const requiredEmpId = jobs.find(j => j.confidential)?.teacherEmpId;
-    if (facultyIdInput.trim() === requiredEmpId) {
-      setAuthError("");
-      setIsAuthenticated(true);
-      setShowAuthModal(false);
-    } else {
-      setAuthError("Invalid Faculty ID. Please try again.");
-    }
+    verifyFacultyMutation.mutate({ printId, facultyId: facultyIdInput.trim() }, {
+      onSuccess: (data) => {
+        setAuthError("");
+        setReleaseToken(data.token);
+        setIsAuthenticated(true);
+        setShowAuthModal(false);
+      },
+      onError: () => {
+        setAuthError("Invalid Faculty ID. Please try again.");
+      },
+    });
   };
 
   return (
@@ -302,9 +307,10 @@ export function JobConfirmationScreen() {
                 </button>
                 <button
                   onClick={handleAuthSubmit}
-                  className="flex-1 py-4 text-xl font-bold bg-primary text-black rounded-xl"
+                  disabled={verifyFacultyMutation.isPending}
+                  className="flex-1 py-4 text-xl font-bold bg-primary text-black rounded-xl disabled:opacity-50"
                 >
-                  Verify Access
+                  {verifyFacultyMutation.isPending ? "Verifying..." : "Verify Access"}
                 </button>
               </div>
             </div>

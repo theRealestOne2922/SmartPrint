@@ -18,6 +18,15 @@ import { SystemSetting } from "./models/SystemSetting";
 import { cleanupExpiredJobs } from "./cleanup";
 import { broadcastJobUpdate } from "./websocket";
 import { sendOtpEmail } from "./emailService";
+import { AuditLog } from "./models/AuditLog";
+import {
+  signReleaseToken,
+  verifyReleaseToken,
+  encryptFileEnvelope,
+  hashPassword,
+  verifyPassword,
+  sanitizeJob,
+} from "./security";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // Ensure uploads dir exists
@@ -37,6 +46,31 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Faculty ID / PIN lookup are brute-forceable if unthrottled (6-digit PIN = 10^6 space)
+const verifyFacultyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 6,
+  message: { message: "Too many verification attempts. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const lookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { message: "Too many requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const statusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { message: "Too many status updates. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 async function getPdfPageCount(buffer: Buffer): Promise<number> {
   try {
     const pdfModule: any = await import("pdf-parse");
@@ -50,7 +84,7 @@ async function getPdfPageCount(buffer: Buffer): Promise<number> {
 }
 
 function generatePrintId(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 // Allowed file types for upload validation — defined once at module scope
@@ -186,7 +220,7 @@ export async function registerRoutes(
   app.get("/api/print-jobs", async (req, res) => {
     try {
       const jobs = await PrintJob.find().sort({ createdAt: -1 }).lean();
-      res.json(jobs.map(j => ({ ...j, id: j._id })));
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       console.error("List print jobs error:", err);
       res.status(500).json({ error: "Internal Server Error" });
@@ -227,9 +261,21 @@ export async function registerRoutes(
 
       let finalFilePath = filePath;
       let encrypted = false;
+      let envelopeFields: Partial<{
+        encIv: string;
+        encAuthTag: string;
+        wrappedKey: string;
+        wrappedKeyIv: string;
+        wrappedKeyAuthTag: string;
+      }> = {};
 
-      // ENCRYPTION for Confidential Faculty Jobs
-      if (teacherEmpId && confidential) {
+      // ENCRYPTION for Confidential Faculty Jobs — mandatory, fails closed.
+      // A confidential job is never created unencrypted; if encryption fails
+      // the upload is rejected instead of silently storing plaintext.
+      if (confidential) {
+        if (!teacherEmpId) {
+          return res.status(400).json({ message: "A Faculty ID is required for confidential jobs." });
+        }
         try {
           // Extract the filename from the public URL filePath
           const urlObj = new URL(filePath);
@@ -239,20 +285,23 @@ export async function registerRoutes(
           // Read the file from disk
           const fileBuffer = await fs.readFile(localPath);
 
-          // Generate encryption key based on Faculty ID + OTP (Job ID)
-          const key = crypto.createHash('sha256').update(teacherEmpId + jobId).digest();
-          const iv = crypto.randomBytes(16);
-          const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+          // Per-file random key (DEK), wrapped by the server-only MASTER_KEY.
+          // Nothing here is derivable from any value the API ever returns.
+          const envelope = encryptFileEnvelope(fileBuffer);
+          await fs.writeFile(localPath, envelope.ciphertext);
 
-          const encryptedBuffer = Buffer.concat([iv, cipher.update(fileBuffer), cipher.final()]);
-
-          // Write encrypted data back to the same path
-          await fs.writeFile(localPath, encryptedBuffer);
+          envelopeFields = {
+            encIv: envelope.encIv,
+            encAuthTag: envelope.encAuthTag,
+            wrappedKey: envelope.wrappedKey,
+            wrappedKeyIv: envelope.wrappedKeyIv,
+            wrappedKeyAuthTag: envelope.wrappedKeyAuthTag,
+          };
           encrypted = true;
           console.log(`🔒 Encrypted file ${localFileName} for Job ${jobId}`);
-        } catch (encErr) {
+        } catch (encErr: any) {
           console.error("Encryption failed:", encErr);
-          // Fall back to unencrypted if it fails, or you could abort the job
+          return res.status(500).json({ message: "Failed to secure confidential document. Job not created." });
         }
       }
 
@@ -273,6 +322,7 @@ export async function registerRoutes(
         status: 'uploaded',
         confidential: confidential || false,
         encrypted,
+        ...envelopeFields,
       });
 
       // Send Email OTP if teacherEmail is provided
@@ -281,7 +331,7 @@ export async function registerRoutes(
         sendOtpEmail(teacherEmail, studentName || "Faculty Member", jobId, fileName).catch(console.error);
       }
 
-      res.status(201).json(job.toJSON());
+      res.status(201).json(sanitizeJob(job.toJSON()));
     } catch (err: any) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
@@ -301,7 +351,7 @@ export async function registerRoutes(
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "Print job not found" });
       }
-      const mapped = jobs.map(j => ({ ...j, id: j._id }));
+      const mapped = jobs.map(j => sanitizeJob({ ...j, id: j._id }));
       res.json(mapped.length === 1 ? mapped[0] : mapped);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -363,7 +413,7 @@ export async function registerRoutes(
       const teacher = await Teacher.create({
         name,
         email,
-        password, // In production, hash this with bcrypt!
+        password: await hashPassword(password),
         empId,
         department: 'General',
       });
@@ -383,13 +433,19 @@ export async function registerRoutes(
       }
 
       const teacher = await Teacher.findOne({ email });
-
-      // Plain text check for demo purposes (use bcrypt in production)
-      if (!teacher || teacher.password !== password) {
+      if (!teacher) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      res.json({ 
+      const { ok, needsUpgrade } = await verifyPassword(password, teacher.password);
+      if (!ok) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      if (needsUpgrade) {
+        await Teacher.updateOne({ _id: teacher._id }, { password: await hashPassword(password) });
+      }
+
+      res.json({
         success: true, 
         name: teacher.name, 
         email: teacher.email, 
@@ -439,7 +495,7 @@ export async function registerRoutes(
       }
 
       // Generate 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otp = crypto.randomInt(100000, 1000000).toString();
       
       // Save OTP to teacher document, expires in 15 minutes
       await Teacher.updateOne(
@@ -508,7 +564,7 @@ export async function registerRoutes(
       await Teacher.updateOne(
         { _id: teacher._id },
         {
-          $set: { password: newPassword },
+          $set: { password: await hashPassword(newPassword) },
           $unset: { resetPasswordOtp: 1, resetPasswordExpires: 1 }
         }
       );
@@ -527,13 +583,17 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Username and password are required" });
       }
 
-      const admin = await Admin.findOne({
-        username: username.trim(),
-        passwordHash: password,
-      });
-
+      const admin = await Admin.findOne({ username: username.trim() });
       if (!admin) {
         return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      const { ok, needsUpgrade } = await verifyPassword(password, admin.passwordHash);
+      if (!ok) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      if (needsUpgrade) {
+        await Admin.updateOne({ _id: admin._id }, { passwordHash: await hashPassword(password) });
       }
 
       res.json({ success: true, username: admin.username });
@@ -596,16 +656,54 @@ export async function registerRoutes(
   // ═══════════════════════════════════════════════════════════════
 
   // Lookup job(s) by PIN (kiosk IdleScreen + hooks)
-  app.get("/api/jobs/lookup/:printId", async (req, res) => {
+  app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {
     try {
       const { printId } = req.params;
       const jobs = await PrintJob.find({ jobId: printId }).lean();
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "No print job found for this code." });
       }
-      res.json(jobs.map(j => ({ ...j, id: j._id })));
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Server-side faculty verification for confidential jobs at the kiosk.
+  // Replaces the old client-side compare — the correct empId is never sent
+  // to the browser; only a signed, short-lived release token is returned.
+  app.post("/api/jobs/:printId/verify-faculty", verifyFacultyLimiter, async (req, res) => {
+    try {
+      const printId = String(req.params.printId);
+      const { facultyId } = req.body;
+      if (!facultyId || typeof facultyId !== "string") {
+        return res.status(400).json({ message: "Faculty ID is required" });
+      }
+
+      const job = await PrintJob.findOne({ jobId: printId, confidential: true })
+        .select("teacherEmpId")
+        .lean();
+
+      const match = !!job && typeof job.teacherEmpId === "string" &&
+        job.teacherEmpId.trim().toLowerCase() === facultyId.trim().toLowerCase();
+
+      await AuditLog.create({
+        event: "confidential_verify",
+        printId,
+        ip: req.ip,
+        success: match,
+      }).catch(() => {});
+
+      if (!job) {
+        return res.status(404).json({ message: "Confidential job not found" });
+      }
+      if (!match) {
+        return res.status(401).json({ message: "Invalid Faculty ID. Please try again." });
+      }
+
+      res.json({ success: true, token: signReleaseToken(printId) });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Verification failed" });
     }
   });
 
@@ -646,10 +744,29 @@ export async function registerRoutes(
   });
 
   // Update job status by PIN (kiosk uses this for batch status updates)
-  app.patch("/api/jobs/:printId/status", async (req, res) => {
+  app.patch("/api/jobs/:printId/status", statusLimiter, async (req, res) => {
     try {
-      const { printId } = req.params;
-      const { status } = req.body;
+      const printId = String(req.params.printId);
+      const { status, releaseToken } = req.body;
+
+      // Confidential jobs can only move to 'printing' with a valid,
+      // server-issued release token (proof the faculty check passed).
+      if (status === "printing") {
+        const hasConfidential = await PrintJob.exists({ jobId: printId, confidential: true });
+        if (hasConfidential && !verifyReleaseToken(printId, releaseToken)) {
+          await AuditLog.create({
+            event: "confidential_release",
+            printId,
+            ip: req.ip,
+            success: false,
+            detail: "missing/invalid release token",
+          }).catch(() => {});
+          return res.status(403).json({ message: "Faculty verification required before releasing this job." });
+        }
+        if (hasConfidential) {
+          await AuditLog.create({ event: "confidential_release", printId, ip: req.ip, success: true }).catch(() => {});
+        }
+      }
 
       const result = await PrintJob.updateMany({ jobId: printId }, { status });
       if (result.modifiedCount === 0) {
@@ -676,7 +793,7 @@ export async function registerRoutes(
       const jobs = await PrintJob.find({ status: 'payment_confirmed' })
         .sort({ createdAt: -1 })
         .lean();
-      res.json(jobs.map(j => ({ ...j, id: j._id })));
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       console.error('Jobs fetch Error:', err);
       res.status(500).json({ error: 'Internal Server Error' });

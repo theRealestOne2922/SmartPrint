@@ -5,8 +5,34 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import rateLimit from "express-rate-limit";
 import { PrintJob } from "./models/PrintJob";
 import { broadcastJobUpdate } from "./websocket";
+import { signReleaseToken, verifyReleaseToken, sanitizeJob } from "./security";
+
+const verifyFacultyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 6,
+  message: { message: "Too many verification attempts. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const lookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { message: "Too many requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const statusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { message: "Too many status updates. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -67,16 +93,45 @@ export async function registerRoutes(
   });
 
   // ─── Lookup job(s) by PIN (for IdleScreen and client hooks) ───
-  app.get("/api/jobs/lookup/:printId", async (req, res) => {
+  app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {
     try {
       const { printId } = req.params;
       const jobs = await PrintJob.find({ jobId: printId }).lean();
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "No print job found for this code." });
       }
-      res.json(jobs.map(j => ({ ...j, id: j._id })));
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ─── Server-side faculty verification for confidential jobs ───
+  app.post("/api/jobs/:printId/verify-faculty", verifyFacultyLimiter, async (req, res) => {
+    try {
+      const printId = String(req.params.printId);
+      const { facultyId } = req.body;
+      if (!facultyId || typeof facultyId !== "string") {
+        return res.status(400).json({ message: "Faculty ID is required" });
+      }
+
+      const job = await PrintJob.findOne({ jobId: printId, confidential: true })
+        .select("teacherEmpId")
+        .lean();
+
+      const match = !!job && typeof job.teacherEmpId === "string" &&
+        job.teacherEmpId.trim().toLowerCase() === facultyId.trim().toLowerCase();
+
+      if (!job) {
+        return res.status(404).json({ message: "Confidential job not found" });
+      }
+      if (!match) {
+        return res.status(401).json({ message: "Invalid Faculty ID. Please try again." });
+      }
+
+      res.json({ success: true, token: signReleaseToken(printId) });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Verification failed" });
     }
   });
 
@@ -117,10 +172,17 @@ export async function registerRoutes(
   });
 
   // ─── Update job status by PIN ───
-  app.patch("/api/jobs/:printId/status", async (req, res) => {
+  app.patch("/api/jobs/:printId/status", statusLimiter, async (req, res) => {
     try {
-      const { printId } = req.params;
-      const { status } = req.body;
+      const printId = String(req.params.printId);
+      const { status, releaseToken } = req.body;
+
+      if (status === "printing") {
+        const hasConfidential = await PrintJob.exists({ jobId: printId, confidential: true });
+        if (hasConfidential && !verifyReleaseToken(printId, releaseToken)) {
+          return res.status(403).json({ message: "Faculty verification required before releasing this job." });
+        }
+      }
 
       const result = await PrintJob.updateMany({ jobId: printId }, { status });
       if (result.modifiedCount === 0) {
@@ -148,7 +210,7 @@ export async function registerRoutes(
         .sort({ createdAt: -1 })
         .lean();
 
-      res.json(jobs.map(j => ({ ...j, id: j._id })));
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       console.error('Jobs fetch Error:', err);
       res.status(500).json({ error: 'Internal Server Error' });

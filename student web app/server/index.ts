@@ -11,6 +11,7 @@ import { initWebSocket } from "./websocket";
 import { Admin } from "./models/Admin";
 import { Teacher } from "./models/Teacher";
 import { SystemSetting } from "./models/SystemSetting";
+import { hashPassword } from "./security";
 
 const app = express();
 const httpServer = createServer(app);
@@ -93,7 +94,7 @@ async function seedDefaultData() {
     // Seed admin if none exists
     const adminCount = await Admin.countDocuments();
     if (adminCount === 0) {
-      await Admin.create({ username: 'vit admin', passwordHash: 'admin123' });
+      await Admin.create({ username: 'vit admin', passwordHash: await hashPassword('admin123') });
       console.log('[seed] ✅ Created default admin user (vit admin / admin123)');
     }
 
@@ -104,7 +105,7 @@ async function seedDefaultData() {
         empId: '1001',
         name: 'Teacher Name',
         email: 'realme11421@gmail.com',
-        password: 'password123',
+        password: await hashPassword('password123'),
         department: 'CS',
       });
       console.log('[seed] ✅ Created default teacher');

@@ -23,7 +23,6 @@ function mapJob(d: any) {
     status: d.status,
     confidential: d.confidential,
     encrypted: d.encrypted,
-    teacherEmpId: d.teacherEmpId,
     createdAt: d.createdAt,
   };
 }
@@ -49,16 +48,35 @@ export function usePrintJob(printId: string | null, pollInterval?: number) {
   });
 }
 
+// Verifies a Faculty ID for a confidential job entirely server-side and
+// returns a short-lived release token — the correct ID is never sent to the browser.
+export function useVerifyFacultyAccess() {
+  return useMutation({
+    mutationFn: async ({ printId, facultyId }: { printId: string; facultyId: string }) => {
+      const res = await fetch(`${API_BASE}/api/jobs/${printId}/verify-faculty`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ facultyId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Verification failed');
+      }
+      return data as { success: boolean; token: string };
+    },
+  });
+}
+
 export function useUpdatePrintJobStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ printId, status }: { printId: string; status: string }) => {
+    mutationFn: async ({ printId, status, releaseToken }: { printId: string; status: string; releaseToken?: string }) => {
       // Update via Express API (was: supabase.from('print_jobs').update({ status }).eq('job_id', printId))
       const res = await fetch(`${API_BASE}/api/jobs/${printId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, releaseToken }),
       });
 
       if (!res.ok) {

@@ -17,6 +17,11 @@ export interface IPrintJob {
   status: string;
   confidential: boolean;
   encrypted: boolean;
+  encIv: string | null;
+  encAuthTag: string | null;
+  wrappedKey: string | null;
+  wrappedKeyIv: string | null;
+  wrappedKeyAuthTag: string | null;
   stripeSessionId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -46,6 +51,11 @@ const printJobSchema = new Schema<IPrintJobDocument>(
     status: { type: String, required: true, default: 'uploaded' },
     confidential: { type: Boolean, default: false },
     encrypted: { type: Boolean, default: false },
+    encIv: { type: String, default: null },
+    encAuthTag: { type: String, default: null },
+    wrappedKey: { type: String, default: null },
+    wrappedKeyIv: { type: String, default: null },
+    wrappedKeyAuthTag: { type: String, default: null },
     stripeSessionId: { type: String, default: null },
   },
   {
