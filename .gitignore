@@ -134,3 +134,6 @@ dist-client/
 dist-server/
 dist/
 build/
+
+# Backup archives (may contain .env files — never commit these)
+*.zip
