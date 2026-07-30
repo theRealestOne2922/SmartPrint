@@ -876,10 +876,23 @@ chmod +x "$INSTALL_DIR/setup-printer.sh"
 chmod +x "$INSTALL_DIR/fix-printer.sh"
 chmod +x "$INSTALL_DIR/fix-fonts.sh"
 
-# Write the .env template. Secrets are deliberately NOT baked into this
-# script — the operator fills them in before the agent starts.
-echo "🔑 Writing .env template (you must fill it in before the agent runs)..."
-cat << 'EOF' > "$INSTALL_DIR/.env"
+# Write the .env template, but never over an existing one — re-running this
+# installer to update an agent must not wipe a working config. Secrets are
+# deliberately NOT baked into this script.
+if [ -f "$INSTALL_DIR/.env" ]; then
+    echo "🔑 Existing .env found — leaving it untouched."
+    # Warn if this install predates envelope encryption, since confidential
+    # jobs silently fail to decrypt without a MASTER_KEY.
+    if ! grep -qE '^MASTER_KEY=.+' "$INSTALL_DIR/.env"; then
+        echo ""
+        echo "⚠️  MASTER_KEY is missing from $INSTALL_DIR/.env"
+        echo "    Confidential documents will NOT decrypt or print until you add it."
+        echo "    It must match the backend's MASTER_KEY exactly (64 hex chars)."
+        echo ""
+    fi
+else
+    echo "🔑 Writing .env template (you must fill it in before the agent runs)..."
+    cat << 'EOF' > "$INSTALL_DIR/.env"
 # MongoDB connection string — same database as the backend
 MONGODB_URI=
 
@@ -891,6 +904,7 @@ MASTER_KEY=
 # Hours to retain completed jobs before cleanup (default 24)
 CLEANUP_HOURS=24
 EOF
+fi
 
 echo "✅ App files successfully written to $INSTALL_DIR"
 echo ""
