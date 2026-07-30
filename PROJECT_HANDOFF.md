@@ -195,7 +195,7 @@ pm2 restart smartprint-agent
 
 ## Critical Things to Know
 
-1. **NO SUPABASE ANYMORE.** All Supabase code, clients, and dependencies have been completely removed. The `_supabase_backup/` folder is just an archive. Do NOT re-introduce Supabase.
+1. **NO SUPABASE ANYMORE.** All Supabase code, clients, and dependencies have been removed, along with the old `_supabase_backup/` archive folder. Do NOT re-introduce Supabase.
 
 2. **File uploads go to local filesystem.** The Express backend saves uploaded files to `<cwd>/uploads/` on the Oracle VM and serves them via `app.use('/uploads', express.static(...))`. Nginx proxies this through HTTPS.
 
