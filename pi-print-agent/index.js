@@ -201,10 +201,18 @@ async function claimJob(job) {
         {
             _id: job._id,
             status: 'printing',
-            $or: [
-                { agentClaimedAt: null },
-                { agentClaimedAt: { $exists: false } },
-                { agentClaimedAt: { $lt: staleCutoff } },
+            // Once CUPS has the file, paper is committed. Such a job is never
+            // reclaimed, however stale the claim looks — reconcileSpooledJobs
+            // finishes it off instead.
+            $and: [
+                { $or: [{ agentSpooledAt: null }, { agentSpooledAt: { $exists: false } }] },
+                {
+                    $or: [
+                        { agentClaimedAt: null },
+                        { agentClaimedAt: { $exists: false } },
+                        { agentClaimedAt: { $lt: staleCutoff } },
+                    ],
+                },
             ],
         },
         { $set: { agentClaimedAt: new Date() } },
@@ -407,6 +415,11 @@ async function processJob(job) {
         if (stderr) console.warn(`[PRINTER WARNING]: ${stderr}`);
         console.log(`[JOB ${job.jobId}] Spooled: ${stdout.trim()}`);
 
+        // Record this before anything else can fail. Everything below — the
+        // spool wait, the unlinks, the status write — can be interrupted, and
+        // without this marker a restart would treat the job as never printed.
+        await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+
         // Small delay to ensure CUPS spooling has completely finished reading the file
         await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -431,21 +444,27 @@ async function processJob(job) {
     }
 }
 
-async function catchUpMissedJobs() {
-    console.log('[SYSTEM] Scanning for missed jobs...');
+let catchUpRunning = false;
+
+async function catchUpMissedJobs(quiet = false) {
+    if (catchUpRunning) return;
+    catchUpRunning = true;
+    if (!quiet) console.log('[SYSTEM] Scanning for missed jobs...');
     try {
         const jobs = await PrintJob.find({ status: 'printing' }).lean();
 
         if (jobs && jobs.length > 0) {
-            console.log(`[SYSTEM] Found ${jobs.length} missed jobs. Processing...`);
+            console.log(`[SYSTEM] Found ${jobs.length} job(s) awaiting print. Processing...`);
             for (const job of jobs) {
                 await processJob(job);
             }
-        } else {
+        } else if (!quiet) {
             console.log('[SYSTEM] No missed jobs. Queue is clean.');
         }
     } catch (err) {
         console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
+    } finally {
+        catchUpRunning = false;
     }
 }
 
@@ -478,10 +497,19 @@ function startListener() {
 
     console.log('[SYSTEM] Starting MongoDB Change Stream listener...');
 
-    const stream = PrintJob.watch(
-        [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
-        { fullDocument: 'updateLookup' }
-    );
+    let stream;
+    try {
+        stream = PrintJob.watch(
+            [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
+            { fullDocument: 'updateLookup' }
+        );
+    } catch (err) {
+        // watch() throws outright if the connection is down. Reaching this from
+        // inside the reconnect timer would otherwise be an uncaught exception,
+        // which now takes the whole process with it.
+        scheduleReconnect(`could not be opened: ${err.message}`);
+        return;
+    }
     changeStream = stream;
 
     stream.on('change', (change) => {
@@ -505,6 +533,27 @@ function startListener() {
     });
 
     console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
+}
+
+// Jobs that reached the printer but whose agent died before writing the final
+// status would otherwise sit at 'printing' on the dashboard forever: the claim
+// guard correctly refuses to reprint them, so nothing else would ever move
+// them. The paper already came out, so record what actually happened.
+const SPOOL_SETTLE_MS = 2 * 60 * 1000;
+
+async function reconcileSpooledJobs() {
+    try {
+        const cutoff = new Date(Date.now() - SPOOL_SETTLE_MS);
+        const { modifiedCount } = await PrintJob.updateMany(
+            { status: 'printing', agentSpooledAt: { $ne: null, $lt: cutoff } },
+            { $set: { status: 'completed' } }
+        );
+        if (modifiedCount) {
+            console.log(`[SYSTEM] Marked ${modifiedCount} already-printed job(s) as completed.`);
+        }
+    } catch (err) {
+        console.error('[SYSTEM] Reconcile failed:', err.message);
+    }
 }
 
 // Retention is owned by the admin dashboard (systemsettings.jobExpirationHours),
@@ -621,21 +670,18 @@ try {
 // Clear decrypted documents orphaned by a previous run
 await sweepTempFiles();
 
-// Run cleanup immediately on startup
-cleanupOldJobs();
-
-// Schedule cleanup to run every 1 hour (3600000 ms)
-const cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
-
-// Start Change Stream listener + catch up missed jobs
-startListener();
-await catchUpMissedJobs();
+// Assigned below. Declared up here so the signal handlers can be installed
+// before the startup catch-up, which can take a while with a full queue — a
+// restart during it used to hard-kill the process mid-job.
+let cleanupInterval = null;
+let sweepInterval = null;
 
 function shutdown(code) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('Shutting down...');
     clearInterval(cleanupInterval);
+    clearInterval(sweepInterval);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (changeStream) {
         changeStream.removeAllListeners();
@@ -660,3 +706,22 @@ process.on('uncaughtException', (err) => {
     // printing and nothing restarts it. Exit and let PM2 bring up a clean one.
     shutdown(1);
 });
+
+// Run cleanup immediately on startup, then hourly
+cleanupOldJobs();
+cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
+
+// Start Change Stream listener + catch up missed jobs
+startListener();
+await reconcileSpooledJobs();
+await catchUpMissedJobs();
+
+// The change stream is the fast path, not the only path. It can miss events
+// while reconnecting, and a job whose claim went stale needs someone to look
+// again — startup-only catch-up meant nothing ever did.
+sweepInterval = setInterval(async () => {
+    await reconcileSpooledJobs();
+    await catchUpMissedJobs(true);
+}, 5 * 60 * 1000);
+
+console.log('[SYSTEM] Agent ready.');

@@ -24,7 +24,12 @@ const sources = [
   { marker: '$INSTALL_DIR/.env.example', file: '.env.example' },
 ];
 
-let lines = fs.readFileSync(installer, 'utf8').split('\n');
+// Normalise line endings on both sides. The installer is LF, but a Windows
+// checkout gives the agent sources CRLF, which would otherwise make every line
+// look changed and report the installer stale forever.
+const readLines = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+
+let lines = readLines(installer).split('\n');
 let stale = [];
 
 for (const { marker, file } of sources) {
@@ -34,7 +39,7 @@ for (const { marker, file } of sources) {
   const end = lines.findIndex((l, i) => i > start && l === 'EOF');
   if (end === -1) throw new Error(`unterminated heredoc for ${marker}`);
 
-  const body = fs.readFileSync(path.join(dir, file), 'utf8').replace(/\s*$/, '').split('\n');
+  const body = readLines(path.join(dir, file)).replace(/\s*$/, '').split('\n');
   if (body.some(l => l === 'EOF')) {
     throw new Error(`${file} contains a bare EOF line, which would end the heredoc early`);
   }
@@ -56,9 +61,12 @@ if (checkOnly) {
   process.exit(0);
 }
 
-if (stale.length) {
-  fs.writeFileSync(installer, lines.join('\n'), 'utf8');
-  console.log(`re-embedded: ${stale.join(', ')}`);
+const output = lines.join('\n');
+if (output !== fs.readFileSync(installer, 'utf8')) {
+  // Always LF. This script runs on a Raspberry Pi, where a stray carriage
+  // return turns every command into "$'\r': command not found".
+  fs.writeFileSync(installer, output, 'utf8');
+  console.log(stale.length ? `re-embedded: ${stale.join(', ')}` : 'normalised line endings.');
 } else {
   console.log('already in sync, nothing to do.');
 }

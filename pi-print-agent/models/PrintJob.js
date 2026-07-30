@@ -30,6 +30,10 @@ const printJobSchema = new mongoose.Schema({
     // duplicate change-stream event cannot send the same exam paper to the
     // printer twice. The backend neither reads nor writes it.
     agentClaimedAt: { type: Date, default: null },
+    // Set the moment CUPS accepts the job. Paper is committed from here on, so
+    // this job must never be retried even if the agent dies before it can write
+    // the final status.
+    agentSpooledAt: { type: Date, default: null },
 }, {
     timestamps: true,
     toJSON: {

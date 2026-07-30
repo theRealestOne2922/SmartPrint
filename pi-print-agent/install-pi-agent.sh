@@ -244,6 +244,10 @@ const printJobSchema = new mongoose.Schema({
     // duplicate change-stream event cannot send the same exam paper to the
     // printer twice. The backend neither reads nor writes it.
     agentClaimedAt: { type: Date, default: null },
+    // Set the moment CUPS accepts the job. Paper is committed from here on, so
+    // this job must never be retried even if the agent dies before it can write
+    // the final status.
+    agentSpooledAt: { type: Date, default: null },
 }, {
     timestamps: true,
     toJSON: {
@@ -464,10 +468,18 @@ async function claimJob(job) {
         {
             _id: job._id,
             status: 'printing',
-            $or: [
-                { agentClaimedAt: null },
-                { agentClaimedAt: { $exists: false } },
-                { agentClaimedAt: { $lt: staleCutoff } },
+            // Once CUPS has the file, paper is committed. Such a job is never
+            // reclaimed, however stale the claim looks — reconcileSpooledJobs
+            // finishes it off instead.
+            $and: [
+                { $or: [{ agentSpooledAt: null }, { agentSpooledAt: { $exists: false } }] },
+                {
+                    $or: [
+                        { agentClaimedAt: null },
+                        { agentClaimedAt: { $exists: false } },
+                        { agentClaimedAt: { $lt: staleCutoff } },
+                    ],
+                },
             ],
         },
         { $set: { agentClaimedAt: new Date() } },
@@ -670,6 +682,11 @@ async function processJob(job) {
         if (stderr) console.warn(`[PRINTER WARNING]: ${stderr}`);
         console.log(`[JOB ${job.jobId}] Spooled: ${stdout.trim()}`);
 
+        // Record this before anything else can fail. Everything below — the
+        // spool wait, the unlinks, the status write — can be interrupted, and
+        // without this marker a restart would treat the job as never printed.
+        await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+
         // Small delay to ensure CUPS spooling has completely finished reading the file
         await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -694,21 +711,27 @@ async function processJob(job) {
     }
 }
 
-async function catchUpMissedJobs() {
-    console.log('[SYSTEM] Scanning for missed jobs...');
+let catchUpRunning = false;
+
+async function catchUpMissedJobs(quiet = false) {
+    if (catchUpRunning) return;
+    catchUpRunning = true;
+    if (!quiet) console.log('[SYSTEM] Scanning for missed jobs...');
     try {
         const jobs = await PrintJob.find({ status: 'printing' }).lean();
 
         if (jobs && jobs.length > 0) {
-            console.log(`[SYSTEM] Found ${jobs.length} missed jobs. Processing...`);
+            console.log(`[SYSTEM] Found ${jobs.length} job(s) awaiting print. Processing...`);
             for (const job of jobs) {
                 await processJob(job);
             }
-        } else {
+        } else if (!quiet) {
             console.log('[SYSTEM] No missed jobs. Queue is clean.');
         }
     } catch (err) {
         console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
+    } finally {
+        catchUpRunning = false;
     }
 }
 
@@ -741,10 +764,19 @@ function startListener() {
 
     console.log('[SYSTEM] Starting MongoDB Change Stream listener...');
 
-    const stream = PrintJob.watch(
-        [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
-        { fullDocument: 'updateLookup' }
-    );
+    let stream;
+    try {
+        stream = PrintJob.watch(
+            [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
+            { fullDocument: 'updateLookup' }
+        );
+    } catch (err) {
+        // watch() throws outright if the connection is down. Reaching this from
+        // inside the reconnect timer would otherwise be an uncaught exception,
+        // which now takes the whole process with it.
+        scheduleReconnect(`could not be opened: ${err.message}`);
+        return;
+    }
     changeStream = stream;
 
     stream.on('change', (change) => {
@@ -768,6 +800,27 @@ function startListener() {
     });
 
     console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
+}
+
+// Jobs that reached the printer but whose agent died before writing the final
+// status would otherwise sit at 'printing' on the dashboard forever: the claim
+// guard correctly refuses to reprint them, so nothing else would ever move
+// them. The paper already came out, so record what actually happened.
+const SPOOL_SETTLE_MS = 2 * 60 * 1000;
+
+async function reconcileSpooledJobs() {
+    try {
+        const cutoff = new Date(Date.now() - SPOOL_SETTLE_MS);
+        const { modifiedCount } = await PrintJob.updateMany(
+            { status: 'printing', agentSpooledAt: { $ne: null, $lt: cutoff } },
+            { $set: { status: 'completed' } }
+        );
+        if (modifiedCount) {
+            console.log(`[SYSTEM] Marked ${modifiedCount} already-printed job(s) as completed.`);
+        }
+    } catch (err) {
+        console.error('[SYSTEM] Reconcile failed:', err.message);
+    }
 }
 
 // Retention is owned by the admin dashboard (systemsettings.jobExpirationHours),
@@ -884,21 +937,18 @@ try {
 // Clear decrypted documents orphaned by a previous run
 await sweepTempFiles();
 
-// Run cleanup immediately on startup
-cleanupOldJobs();
-
-// Schedule cleanup to run every 1 hour (3600000 ms)
-const cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
-
-// Start Change Stream listener + catch up missed jobs
-startListener();
-await catchUpMissedJobs();
+// Assigned below. Declared up here so the signal handlers can be installed
+// before the startup catch-up, which can take a while with a full queue — a
+// restart during it used to hard-kill the process mid-job.
+let cleanupInterval = null;
+let sweepInterval = null;
 
 function shutdown(code) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('Shutting down...');
     clearInterval(cleanupInterval);
+    clearInterval(sweepInterval);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (changeStream) {
         changeStream.removeAllListeners();
@@ -923,6 +973,25 @@ process.on('uncaughtException', (err) => {
     // printing and nothing restarts it. Exit and let PM2 bring up a clean one.
     shutdown(1);
 });
+
+// Run cleanup immediately on startup, then hourly
+cleanupOldJobs();
+cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
+
+// Start Change Stream listener + catch up missed jobs
+startListener();
+await reconcileSpooledJobs();
+await catchUpMissedJobs();
+
+// The change stream is the fast path, not the only path. It can miss events
+// while reconnecting, and a job whose claim went stale needs someone to look
+// again — startup-only catch-up meant nothing ever did.
+sweepInterval = setInterval(async () => {
+    await reconcileSpooledJobs();
+    await catchUpMissedJobs(true);
+}, 5 * 60 * 1000);
+
+console.log('[SYSTEM] Agent ready.');
 EOF
 
 # Write setup-printer.sh
@@ -1142,19 +1211,32 @@ ln -sf /usr/local/bin/pm2 /usr/bin/pm2
 
 # Make sure PM2 is configured to start up automatically on boot
 echo "   Configuring persistent auto-start..."
-/usr/bin/pm2 stop smartprint-agent 2>/dev/null || true
-/usr/bin/pm2 delete smartprint-agent 2>/dev/null || true
+
+# This script runs under sudo, so a bare `pm2` here is ROOT's pm2 and saves to
+# /root/.pm2/dump.pm2. The boot unit installed below resurrects $REAL_USER's
+# pm2, which reads $USER_HOME/.pm2/dump.pm2 — a different file that would never
+# have contained the agent. The Pi printed fine until its first reboot and then
+# silently stopped. Every pm2 call that owns the process runs as the real user.
+pm2_user() {
+    sudo -u "$REAL_USER" env HOME="$USER_HOME" PM2_HOME="$USER_HOME/.pm2" /usr/bin/pm2 "$@"
+}
+
+pm2_user stop smartprint-agent 2>/dev/null || true
+pm2_user delete smartprint-agent 2>/dev/null || true
 
 # Only start if the operator has filled in .env — otherwise the agent would
 # exit immediately on a missing MONGODB_URI and PM2 would crash-loop it.
 if grep -qE '^MONGODB_URI=.+' "$INSTALL_DIR/.env"; then
-    /usr/bin/pm2 start index.js --name smartprint-agent
-    /usr/bin/pm2 save
+    # Ownership first: pm2 runs as $REAL_USER from here on and must be able to
+    # read the files npm install just created as root.
+    chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR"
+    pm2_user start "$INSTALL_DIR/index.js" --name smartprint-agent
+    pm2_user save
     AGENT_STARTED=1
 else
     echo ""
     echo "⚠️  MONGODB_URI is empty in $INSTALL_DIR/.env — agent NOT started."
-    echo "    Fill in MONGODB_URI and MASTER_KEY, then run:"
+    echo "    Fill in MONGODB_URI and MASTER_KEY, then run (WITHOUT sudo):"
     echo "      cd $INSTALL_DIR && pm2 start index.js --name smartprint-agent && pm2 save"
     echo ""
     AGENT_STARTED=0
@@ -1274,14 +1356,25 @@ else
     bash ./setup-printer.sh usb || true
 fi
 
-# Clean up PM2 to reload with new default printer
-/usr/bin/pm2 restart smartprint-agent
+# Clean up PM2 to reload with new default printer.
+# Only if it is actually running, and as the user that owns it — `set -e` is on,
+# so restarting a process this pm2 has never heard of aborted the installer
+# right before the summary and made a good install look like a failed one.
+if [ "$AGENT_STARTED" = "1" ]; then
+    pm2_user restart smartprint-agent || true
+fi
 
 echo ""
 echo "==================================================================="
 echo "🎉 SMARTPRINT COMPLETE KI-OSK SETUP SUCCESSFUL!"
 echo "==================================================================="
-echo "  The database print agent is running in the background (PM2)."
+if [ "$AGENT_STARTED" = "1" ]; then
+    echo "  The database print agent is running in the background (PM2)."
+else
+    echo "  ⚠️  The print agent is NOT running — $INSTALL_DIR/.env is incomplete."
+    echo "     Fill in MONGODB_URI and MASTER_KEY, then (WITHOUT sudo):"
+    echo "       cd $INSTALL_DIR && pm2 start index.js --name smartprint-agent && pm2 save"
+fi
 echo "  Keep track of logs with:   pm2 logs smartprint-agent"
 echo "  Restart agent with:        pm2 restart smartprint-agent"
 echo ""
