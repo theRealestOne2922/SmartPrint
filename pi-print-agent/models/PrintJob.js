@@ -17,6 +17,14 @@ const printJobSchema = new mongoose.Schema({
     status: { type: String, required: true, default: 'uploaded' },
     confidential: { type: Boolean, default: false },
     encrypted: { type: Boolean, default: false },
+    // Envelope-encryption metadata written by the backend. These must stay
+    // declared here: Mongoose strips schema-undeclared fields when hydrating,
+    // so a non-lean read would silently drop them and decryption would fail.
+    encIv: { type: String, default: null },
+    encAuthTag: { type: String, default: null },
+    wrappedKey: { type: String, default: null },
+    wrappedKeyIv: { type: String, default: null },
+    wrappedKeyAuthTag: { type: String, default: null },
     stripeSessionId: { type: String, default: null },
 }, {
     timestamps: true,

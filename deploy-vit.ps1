@@ -16,9 +16,12 @@ if (!(Test-Path -Path "student web app\dist\public\kiosk-app")) {
 }
 Copy-Item -Path "kiosk ui\dist\public\*" -Destination "student web app\dist\public\kiosk-app\" -Recurse -Force
 
-Write-Host "Deploying to Firebase Hosting..."
+Write-Host "Deploying to Firebase Hosting (project: smartprintvit)..."
 cd "student web app"
-npx firebase deploy --only hosting
+# --project is pinned deliberately: without it, a stray `firebase use` can
+# redirect this deploy to a different SmartPrint site. Do not remove.
+npx firebase deploy --only hosting --project smartprintvit
+if ($LASTEXITCODE -ne 0) { Write-Error "Firebase deploy failed"; cd ..; exit 1 }
 cd ..
 
 Write-Host "Done!"
