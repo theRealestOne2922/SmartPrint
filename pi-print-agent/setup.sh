@@ -30,7 +30,8 @@ if [ ! -f .env ]; then
     echo ""
     echo "⚠️ .env file not found. Creating one from .env.example..."
     cp .env.example .env
-    echo "🚨 IMPORTANT: You must edit the .env file and add your Supabase URL and Service Role Key!"
+    echo "🚨 IMPORTANT: Edit .env and set MONGODB_URI and MASTER_KEY."
+    echo "   MASTER_KEY must match the backend's exactly, or confidential jobs won't decrypt."
     echo "Run 'nano .env' to edit the file."
 else
     echo "✅ .env file exists."
