@@ -203,8 +203,7 @@ cat << 'EOF' > "$INSTALL_DIR/package.json"
     "dependencies": {
         "dotenv": "^16.4.5",
         "mongoose": "^9.6.3",
-        "pdf-lib": "^1.17.1",
-        "ws": "^8.21.0"
+        "pdf-lib": "^1.17.1"
     }
 }
 EOF
@@ -214,7 +213,7 @@ cat << 'EOF' > "$INSTALL_DIR/index.js"
 // SmartPrint Pi Print Agent v4.1 — MongoDB Edition
 // Database: MongoDB (Mongoose)
 // Realtime: MongoDB Change Streams
-// Storage: Files stored locally on Oracle VM (no Supabase)
+// Storage: Files are served from the backend host's local disk
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -569,7 +568,7 @@ async function catchUpMissedJobs() {
     }
 }
 
-// MongoDB Change Stream listener (replaces Supabase Realtime)
+// MongoDB Change Stream listener
 let changeStream = null;
 
 function startListener() {

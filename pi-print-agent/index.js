@@ -1,7 +1,7 @@
 // SmartPrint Pi Print Agent v4.1 — MongoDB Edition
 // Database: MongoDB (Mongoose)
 // Realtime: MongoDB Change Streams
-// Storage: Files stored locally on Oracle VM (no Supabase)
+// Storage: Files are served from the backend host's local disk
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -356,7 +356,7 @@ async function catchUpMissedJobs() {
     }
 }
 
-// MongoDB Change Stream listener (replaces Supabase Realtime)
+// MongoDB Change Stream listener
 let changeStream = null;
 
 function startListener() {
