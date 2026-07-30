@@ -1,6 +1,5 @@
-// ─── API Routes — MongoDB Edition ───
+// API Routes — MongoDB Edition
 // Original Supabase/Drizzle version backed up in _supabase_backup/
-// Supabase client is kept ONLY for Storage (file upload/download).
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
@@ -111,9 +110,7 @@ export async function registerRoutes(
   // Serve uploaded files directly
   app.use("/uploads", express.static(UPLOADS_DIR));
 
-  // ═══════════════════════════════════════════════════════════════
-  // FILE UPLOAD — Still uses Supabase Storage (not a database op)
-  // ═══════════════════════════════════════════════════════════════
+  // FILE UPLOAD — saves to local disk on the VM, not the database
   app.post("/api/upload", uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
@@ -159,9 +156,7 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // DECRYPT — No database involved, unchanged
-  // ═══════════════════════════════════════════════════════════════
   app.post("/api/decrypt", upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
@@ -202,9 +197,7 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // PRINT JOBS — MongoDB
-  // ═══════════════════════════════════════════════════════════════
 
   // Check Job ID uniqueness (must come BEFORE the :jobId param route)
   app.get("/api/print-jobs/check-unique/:jobId", async (req, res) => {
@@ -358,9 +351,7 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // PAYMENT — MongoDB
-  // ═══════════════════════════════════════════════════════════════
 
   app.post("/api/jobs/:jobId/demo-pay", async (req, res) => {
     try {
@@ -393,9 +384,7 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // ADMIN & TEACHER — MongoDB
-  // ═══════════════════════════════════════════════════════════════
 
   app.post("/api/teacher/register", async (req, res) => {
     try {
@@ -613,9 +602,7 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // SETTINGS — MongoDB
-  // ═══════════════════════════════════════════════════════════════
 
   app.get("/api/settings", async (req, res) => {
     try {
@@ -649,11 +636,9 @@ export async function registerRoutes(
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════
   // KIOSK UI ROUTES — Served from the same Express server
   // The kiosk frontend is embedded at /kiosk-app/ and makes
   // API calls to these endpoints on the same origin.
-  // ═══════════════════════════════════════════════════════════════
 
   // Lookup job(s) by PIN (kiosk IdleScreen + hooks)
   app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {

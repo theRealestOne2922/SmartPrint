@@ -1,8 +1,8 @@
-// ─── Security helpers: release tokens, envelope encryption, password hashing ───
+// Security helpers: release tokens, envelope encryption, password hashing
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 
-// ═══ Release tokens (server-issued proof of a passed faculty check) ═══
+// Release tokens (server-issued proof of a passed faculty check)
 // HMAC-signed, time-boxed, single-purpose per printId. Never derived from
 // any value returned to the client (unlike the old teacherEmpId+jobId key).
 const APP_SECRET = process.env.APP_SECRET || "";
@@ -31,7 +31,7 @@ export function verifyReleaseToken(printId: string, token: unknown): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-// ═══ Envelope encryption for confidential documents ═══
+// Envelope encryption for confidential documents
 // Per-file random DEK (AES-256-GCM) wrapped by a server-only MASTER_KEY.
 // The wrapped key never leaves the server and is never derivable from any
 // value returned by the API (unlike the old sha256(teacherEmpId + jobId)).
@@ -74,7 +74,7 @@ export function encryptFileEnvelope(buffer: Buffer): EncryptedEnvelope {
   };
 }
 
-// ═══ Password hashing (bcrypt) with transparent legacy-plaintext migration ═══
+// Password hashing (bcrypt) with transparent legacy-plaintext migration
 export async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 12);
 }
@@ -96,7 +96,7 @@ export async function verifyPassword(
   return { ok, needsUpgrade: ok };
 }
 
-// ═══ Response sanitization — never let job-secret fields reach any client ═══
+// Response sanitization — never let job-secret fields reach any client
 const SENSITIVE_JOB_FIELDS = [
   "teacherEmpId",
   "encIv",

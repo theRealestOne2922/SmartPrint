@@ -1,4 +1,4 @@
-// ─── Shared TypeScript Interfaces & Zod Schemas (Kiosk UI) ───
+// Shared TypeScript Interfaces & Zod Schemas (Kiosk UI)
 // Replaces old Drizzle ORM table definitions.
 import { z } from "zod";
 

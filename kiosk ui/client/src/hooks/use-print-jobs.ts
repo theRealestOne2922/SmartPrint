@@ -1,4 +1,4 @@
-// ─── Kiosk Print Job Hooks — MongoDB Edition ───
+// Kiosk Print Job Hooks — MongoDB Edition
 // All Supabase database calls replaced with Express API fetch().
 import { API_BASE } from "@/lib/api-config";
 // Mongoose returns camelCase fields, so the mapJob() function is simplified.

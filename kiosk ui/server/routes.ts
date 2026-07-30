@@ -1,4 +1,4 @@
-// ─── Kiosk API Routes — MongoDB Edition ───
+// Kiosk API Routes — MongoDB Edition
 // Original Supabase version backed up in _supabase_backup/
 import type { Express } from "express";
 import type { Server } from "http";
@@ -92,7 +92,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Lookup job(s) by PIN (for IdleScreen and client hooks) ───
+  // Lookup job(s) by PIN (for IdleScreen and client hooks)
   app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {
     try {
       const { printId } = req.params;
@@ -106,7 +106,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Server-side faculty verification for confidential jobs ───
+  // Server-side faculty verification for confidential jobs
   app.post("/api/jobs/:printId/verify-faculty", verifyFacultyLimiter, async (req, res) => {
     try {
       const printId = String(req.params.printId);
@@ -135,7 +135,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Update job details (copies, color, etc.) ───
+  // Update job details (copies, color, etc.)
   app.patch("/api/jobs/:id/details", async (req, res) => {
     try {
       const { id } = req.params;
@@ -157,7 +157,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Delete a job item ───
+  // Delete a job item
   app.delete("/api/jobs/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -171,7 +171,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Update job status by PIN ───
+  // Update job status by PIN
   app.patch("/api/jobs/:printId/status", statusLimiter, async (req, res) => {
     try {
       const printId = String(req.params.printId);
@@ -203,7 +203,7 @@ export async function registerRoutes(
     }
   });
 
-  // ─── Fetch paid/confirmed jobs (for IdleScreen queue) ───
+  // Fetch paid/confirmed jobs (for IdleScreen queue)
   app.get("/api/jobs/confirmed", async (req, res) => {
     try {
       const jobs = await PrintJob.find({ status: 'payment_confirmed' })

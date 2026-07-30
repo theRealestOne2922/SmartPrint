@@ -1,4 +1,4 @@
-// ─── Print Hooks — MongoDB Edition ───
+// Print Hooks — MongoDB Edition
 // Database queries now go through Express API instead of direct Supabase calls.
 // Supabase client is kept ONLY for Storage uploads.
 // Original version backed up in _supabase_backup/

@@ -1,5 +1,4 @@
-// ─── Email Service — Brevo API (reliable, free up to 300/day to any address) ───
-
+// Email Service — Brevo API (reliable, free up to 300/day to any address)
 const brevoApiKey = process.env.BREVO_API_KEY || '';
 const FROM_EMAIL = 'smartprintvit@gmail.com';
 const FROM_NAME = 'SmartPrint VIT';

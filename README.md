@@ -1,60 +1,51 @@
 # SmartPrint VIT
 
-A complete, modern college project / prototype for a smart, cloud-connected campus printing solution. 
+A cloud-connected campus printing system: students upload a document from their phone, get a PIN, and walk up to a kiosk next to the printer to release the job.
 
-This repository contains the full end-to-end stack, including a student-facing web app, a physical kiosk interface, and a Raspberry Pi-based printing agent that communicates directly with campus printers.
+## Architecture
 
-## 🏗️ Architecture & Project Structure
-
-The project is divided into three distinct, decoupled components:
+Three independent apps in one repo:
 
 1. **Student Web App (`/student web app`)**
-   - **Role:** The primary interface for students and teachers to upload documents and configure print settings.
-   - **Tech Stack:** React, Vite, Tailwind CSS, Express, Drizzle ORM, Supabase (PostgreSQL).
-   - **Key Features:**
-     - Client-side PDF decryption (via `pdfjs-dist`).
-     - Office file page-count extraction by parsing ZIP metadata (`docProps/app.xml`).
-     - Automatic saddle-stitch booklet generation with live preview (`pdf-lib`).
-     - Rate-limited, secure file uploads directly to Supabase Storage with SHA-256 deduplication.
+   - Tech: React, Vite, Tailwind CSS, Express, MongoDB (Mongoose).
+   - The upload + print-settings portal for students and teachers.
+   - Client-side PDF decryption (`pdfjs-dist`), office file page-count extraction, automatic saddle-stitch booklet layout (`pdf-lib`).
+   - Server-side rate limiting on uploads; files are hashed (SHA-256) for dedup and stored on local disk on the backend host.
 
 2. **Kiosk UI (`/kiosk ui`)**
-   - **Role:** A touch-friendly interface designed to run on a physical kiosk next to the printer for job confirmation and payment.
-   - **Tech Stack:** React, Vite, Tailwind CSS.
-   - **Key Features:**
-     - Sleek, modern UI with Framer Motion animations.
-     - Real-time job status polling and confirmation workflows.
-     - Abstracts storage with support for both in-memory and database backends.
+   - Tech: React, Vite, Tailwind CSS.
+   - Runs full-screen on the touchscreen next to the printer for PIN entry and job confirmation.
+   - Its production build gets copied into the student app's output and served from the same origin, at `/kiosk-app`.
 
 3. **Pi Print Agent (`/pi-print-agent`)**
-   - **Role:** A lightweight Node.js daemon meant to run on a Raspberry Pi connected directly to the printer via USB/Network.
-   - **Tech Stack:** Node.js, CUPS, LibreOffice.
-   - **Key Features:**
-     - Listens to Supabase real-time subscriptions for instant job triggering.
-     - Converts Office documents and images to PDF using headless LibreOffice with auto-recovery/retry logic.
-     - Spools jobs directly to CUPS (`lp` command) for high-fidelity printing.
-     - Avoids GhostScript to prevent page duplication issues.
+   - Tech: Node.js, CUPS, LibreOffice.
+   - Runs on the Raspberry Pi wired to the printer.
+   - Watches MongoDB Change Streams for jobs, converts Office docs/images to PDF via headless LibreOffice, and spools to CUPS (`lp`). GhostScript is intentionally not used — it duplicated pages on our printer.
 
-## 🔐 Security & Reliability
+## Security
 
-- **Graceful File Handling:** Validates extensions, MIME types, and file sizes.
-- **Orphan Cleanup Scheduler:** A background cron routine that automatically purges old jobs from the database and orphaned files from cloud storage after a 3-hour grace period to save space.
-- **Real-time Sync:** Uses Supabase's real-time Postgres changes to sync state between the web app, the kiosk, and the physical printer agent.
+- Confidential (exam-paper) jobs require server-side faculty verification before release — the check never happens in the browser.
+- Files for confidential jobs are encrypted at rest (AES-256-GCM envelope encryption, per-file key wrapped by a server-only master key).
+- Admin/teacher passwords are bcrypt-hashed.
+- PINs/OTPs are generated with `crypto.randomInt`, and lookup/verify endpoints are rate-limited.
+- Background cleanup job purges old print jobs and their files after a configurable retention window.
 
-## 🚀 Getting Started
+## Getting started
 
-Each component has its own `package.json` and can be run independently.
+Each app has its own `package.json` and runs independently:
 
-*Note: You will need to set up a Supabase project and provide the appropriate `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env` files for the components.*
-
-### Running the Web Apps
-Navigate into either the `student web app` or `kiosk ui` directory:
 ```bash
+cd "student web app"   # or "kiosk ui"
 npm install
 npm run dev
 ```
 
-### Running the Print Agent
-Ensure LibreOffice and CUPS are installed on the host machine.
+You'll need a MongoDB connection string and a few other secrets in `.env` — see `.env.example` in each app for what's required.
+
+### Running the print agent
+
+Requires LibreOffice and CUPS on the host:
+
 ```bash
 cd pi-print-agent
 npm install

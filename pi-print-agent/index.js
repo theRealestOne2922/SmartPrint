@@ -1,4 +1,4 @@
-// ─── SmartPrint Pi Print Agent v4.1 — MongoDB Edition ───
+// SmartPrint Pi Print Agent v4.1 — MongoDB Edition
 // Database: MongoDB (Mongoose)
 // Realtime: MongoDB Change Streams
 // Storage: Files stored locally on Oracle VM (no Supabase)
@@ -23,14 +23,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
-// ─── MongoDB Connection ───
+// MongoDB Connection
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
     console.error('Missing MONGODB_URI! Please check your .env file.');
     process.exit(1);
 }
 
-// ─── Confidential document decryption (envelope: per-file DEK wrapped by MASTER_KEY) ───
+// Confidential document decryption (envelope: per-file DEK wrapped by MASTER_KEY)
 // Mirrors "student web app/server/security.ts" encryptFileEnvelope. The DEK is never
 // derived from job data (unlike the old sha256(teacherEmpId + jobId) scheme) — it only
 // exists wrapped in the job document, unwrappable solely with this agent's MASTER_KEY.
@@ -59,7 +59,7 @@ const NEEDS_CONVERSION = new Set([
     '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'
 ]);
 
-// ─── Download file from URL (follows redirects) ───
+// Download file from URL (follows redirects)
 function downloadFile(url, destPath) {
     return new Promise((resolve, reject) => {
         const proto = url.startsWith('https') ? https : http;
@@ -81,7 +81,7 @@ function downloadFile(url, destPath) {
     });
 }
 
-// ─── Convert to PDF using LibreOffice ───
+// Convert to PDF using LibreOffice
 async function convertToPdf(inputPath) {
     const outputDir = path.dirname(inputPath);
     const baseName = path.basename(inputPath, path.extname(inputPath));
@@ -140,11 +140,9 @@ async function convertToPdf(inputPath) {
     return expectedPdf;
 }
 
-// ─────────────────────────────────────────────────────────
 // NO GHOSTSCRIPT! GhostScript duplicates pages on this printer.
 // Files are already decrypted client-side (browser).
 // PDFs go directly to CUPS. No extra processing needed.
-// ─────────────────────────────────────────────────────────
 
 // Lock set — prevents the same job from being processed twice
 const activeJobs = new Set();
@@ -358,7 +356,7 @@ async function catchUpMissedJobs() {
     }
 }
 
-// ─── MongoDB Change Stream listener (replaces Supabase Realtime) ───
+// MongoDB Change Stream listener (replaces Supabase Realtime)
 let changeStream = null;
 
 function startListener() {
@@ -396,7 +394,7 @@ function startListener() {
     console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
 }
 
-// ─── Automated Cleanup Routine ───
+// Automated Cleanup Routine
 async function cleanupOldJobs() {
     try {
         // Allow overriding cleanup time via .env for testing (e.g., CLEANUP_HOURS=0.01 for ~36 seconds)
@@ -436,7 +434,7 @@ async function cleanupOldJobs() {
     }
 }
 
-// ─── Startup ───
+// Startup
 console.log('=============================================');
 console.log('   SMARTPRINT: PI PRINT AGENT v4.0');
 console.log('   MongoDB Edition — no GhostScript');

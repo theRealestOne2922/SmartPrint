@@ -1,4 +1,4 @@
-// ─── Security helpers (kiosk local-dev server) — mirrors "student web app/server/security.ts" ───
+// Security helpers (kiosk local-dev server) — mirrors "student web app/server/security.ts"
 import crypto from "crypto";
 
 const APP_SECRET = process.env.APP_SECRET || "";

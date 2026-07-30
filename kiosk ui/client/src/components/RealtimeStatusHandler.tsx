@@ -1,4 +1,4 @@
-// ─── Realtime Status Handler — WebSocket Edition ───
+// Realtime Status Handler — WebSocket Edition
 // Replaces Supabase Realtime (postgres_changes) with WebSocket connection.
 // Original version backed up in _supabase_backup/
 import { useEffect } from "react";

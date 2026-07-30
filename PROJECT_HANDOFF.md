@@ -1,17 +1,15 @@
-# SmartPrint — Full Project Handoff & Context Note
-> **Date:** June 22, 2026
-> **Author:** Antigravity AI (for Kishore)
-> **Purpose:** Everything a new Antigravity session needs to understand this project immediately.
+# SmartPrint — Project Handoff & Context Note
+> **Last updated:** July 2, 2026
 
 ---
 
-## 🏗️ What is SmartPrint?
+## What is SmartPrint?
 
 SmartPrint is a **college print management system** built for VIT. Students upload documents from their phone via a web app, receive a 6-digit PIN, then enter that PIN at a physical kiosk (Raspberry Pi) connected to a printer. The kiosk fetches the job and prints it automatically.
 
 ---
 
-## 🌐 Live URLs & Infrastructure
+## Live URLs & Infrastructure
 
 | Component | URL / Address | Hosting |
 |-----------|--------------|---------|
@@ -39,7 +37,7 @@ SmartPrint is a **college print management system** built for VIT. Students uplo
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 smartprintvit/
@@ -81,7 +79,7 @@ smartprintvit/
 
 ---
 
-## 🔄 How the System Works (Data Flow)
+## How the System Works (Data Flow)
 
 ```
 Student Phone                 Oracle VM                    Raspberry Pi
@@ -122,7 +120,7 @@ Student Phone                 Oracle VM                    Raspberry Pi
 
 ---
 
-## 🔑 All Environment Variables
+## All Environment Variables
 
 ### `student web app/.env` (local dev + Oracle VM)
 ```
@@ -153,7 +151,7 @@ MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.
 
 ---
 
-## 🚀 Deployment Commands
+## Deployment Commands
 
 ### Deploy Frontend (Student App + Kiosk) to Firebase
 ```powershell
@@ -181,7 +179,7 @@ pm2 restart print-agent
 
 ---
 
-## ⚠️ Critical Things to Know
+## Critical Things to Know
 
 1. **NO SUPABASE ANYMORE.** All Supabase code, clients, and dependencies have been completely removed. The `_supabase_backup/` folder is just an archive. Do NOT re-introduce Supabase.
 
@@ -205,7 +203,7 @@ pm2 restart print-agent
 
 ---
 
-## 🛡️ Security Summary
+## Security Summary
 - All traffic encrypted via TLS/SSL (Let's Encrypt certificate on Oracle VM)
 - MongoDB Atlas uses `mongodb+srv://` (TLS enforced)
 - No credentials exposed to the browser
@@ -219,7 +217,7 @@ pm2 restart print-agent
 
 ---
 
-## 📦 What's in the Handoff ZIP
+## What's in the Handoff ZIP
 
 This ZIP contains the **entire SmartPrint codebase** prepared for the Software Development Cell (SDC):
 - ✅ All source code (`student web app`, `kiosk ui`, `pi-print-agent`)
@@ -233,7 +231,7 @@ This ZIP contains the **entire SmartPrint codebase** prepared for the Software D
 
 ---
 
-## 🏢 VTOP Implementation & Deployment Guide for SDC
+## VTOP Implementation & Deployment Guide for SDC
 
 When migrating SmartPrint to VTOP infrastructure, the SDC team will need to provision their own environments. Since the `.env` files containing our API keys and database credentials have been stripped for security, here is exactly what SDC needs to configure:
 

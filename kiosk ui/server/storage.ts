@@ -1,4 +1,4 @@
-// ─── Kiosk Storage Layer — MongoDB Edition ───
+// Kiosk Storage Layer — MongoDB Edition
 // Original Drizzle version backed up in _supabase_backup/
 import { PrintJob } from "./models/PrintJob";
 import type {

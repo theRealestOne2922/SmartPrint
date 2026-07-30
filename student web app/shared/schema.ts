@@ -1,10 +1,9 @@
-// ─── Shared TypeScript Interfaces & Zod Schemas ───
+// Shared TypeScript Interfaces & Zod Schemas
 // Replaces the old Drizzle ORM table definitions.
 // Original Drizzle version backed up in _supabase_backup/
 import { z } from "zod";
 
-// ─── PrintJob ───
-
+// PrintJob
 export interface PrintJob {
   id: string;
   jobId: string;
@@ -58,8 +57,7 @@ export const insertPrintJobSchema = z.object({
   price: z.number().optional(),
 });
 
-// ─── Teacher ───
-
+// Teacher
 export interface Teacher {
   id: string;
   empId: string;
@@ -69,8 +67,7 @@ export interface Teacher {
   createdAt: Date;
 }
 
-// ─── Admin ───
-
+// Admin
 export interface Admin {
   id: string;
   username: string;
@@ -78,8 +75,7 @@ export interface Admin {
   createdAt: Date;
 }
 
-// ─── SystemSetting ───
-
+// SystemSetting
 export interface SystemSetting {
   id: string;
   key: string;
