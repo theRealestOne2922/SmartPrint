@@ -607,12 +607,30 @@ function startListener() {
     console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
 }
 
+// Retention is owned by the admin dashboard (systemsettings.jobExpirationHours),
+// the same value the backend's cleanup uses. Reading it here keeps the two in
+// step — this agent used to use only CLEANUP_HOURS, so raising retention in the
+// dashboard had no effect and the Pi kept deleting records at 24h.
+// CLEANUP_HOURS stays as an explicit local override for testing.
+async function getRetentionHours() {
+    const override = parseFloat(process.env.CLEANUP_HOURS);
+    if (!isNaN(override) && override > 0) return override;
+    try {
+        const doc = await mongoose.connection.db
+            .collection('systemsettings')
+            .findOne({ key: 'jobExpirationHours' });
+        const hours = parseInt(doc?.value, 10);
+        return isNaN(hours) ? 24 : hours;
+    } catch {
+        return 24;
+    }
+}
+
 // Automated Cleanup Routine
 async function cleanupOldJobs() {
     try {
-        // Allow overriding cleanup time via .env for testing (e.g., CLEANUP_HOURS=0.01 for ~36 seconds)
-        const hoursToKeep = parseFloat(process.env.CLEANUP_HOURS) || 24;
-        
+        const hoursToKeep = await getRetentionHours();
+
         console.log(`[CLEANUP] Running routine to delete files older than ${hoursToKeep} hours...`);
         
         // Calculate the cutoff date
@@ -649,7 +667,7 @@ async function cleanupOldJobs() {
 
 // Startup
 console.log('=============================================');
-console.log('   SMARTPRINT: PI PRINT AGENT v4.0');
+console.log('   SMARTPRINT: PI PRINT AGENT v4.1');
 console.log('   MongoDB Edition — no GhostScript');
 console.log('=============================================');
 
