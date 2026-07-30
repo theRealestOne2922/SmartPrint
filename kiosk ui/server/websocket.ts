@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import mongoose from 'mongoose';
+import { sanitizeJob } from './security';
 
 let wss: WebSocketServer;
 
@@ -69,7 +70,7 @@ export function initWebSocket(httpServer: Server): void {
 
 export function broadcastJobUpdate(job: any): void {
   if (!wss) return;
-  const message = JSON.stringify({ type: 'JOB_UPDATE', job });
+  const message = JSON.stringify({ type: 'JOB_UPDATE', job: sanitizeJob(job) });
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);

@@ -46,7 +46,7 @@ export async function registerRoutes(
     if (!job) {
       return res.status(404).json({ message: "Print job not found" });
     }
-    res.json(job);
+    res.json(sanitizeJob(job));
   });
 
   // Create print job
@@ -54,7 +54,7 @@ export async function registerRoutes(
     try {
       const input = api.printJobs.create.input.parse(req.body);
       const job = await storage.createPrintJob(input);
-      res.status(201).json(job);
+      res.status(201).json(sanitizeJob(job));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
@@ -80,7 +80,7 @@ export async function registerRoutes(
       // Broadcast via WebSocket for realtime updates
       broadcastJobUpdate(job);
 
-      res.json(job);
+      res.json(sanitizeJob(job));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
@@ -151,7 +151,7 @@ export async function registerRoutes(
       if (!job) {
         return res.status(404).json({ message: "Print job not found" });
       }
-      res.json(job.toJSON());
+      res.json(sanitizeJob(job.toJSON()));
     } catch (err: any) {
       res.status(500).json({ message: err.message || "Failed to update job details" });
     }
@@ -190,7 +190,7 @@ export async function registerRoutes(
       }
 
       const updatedJobs = await PrintJob.find({ jobId: printId }).lean();
-      const mapped = updatedJobs.map(j => ({ ...j, id: j._id }));
+      const mapped = updatedJobs.map(j => sanitizeJob({ ...j, id: j._id }));
 
       // Broadcast via WebSocket
       for (const job of mapped) {
