@@ -41,6 +41,7 @@ export default function TeacherLogin() {
       localStorage.setItem("teacherId", data.empId);
       localStorage.setItem("teacherName", data.name);
       localStorage.setItem("teacherEmail", data.email);
+      localStorage.setItem("teacherToken", data.token);
 
       toast({
         title: "Logged in successfully",

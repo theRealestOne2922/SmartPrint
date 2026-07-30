@@ -43,12 +43,20 @@ export default function TeacherProfile() {
     setIsLoading(true);
 
     try {
+      const token = localStorage.getItem("teacherToken");
       const res = await fetch(`${API_BASE}/api/teacher/profile`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, name }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        // The server takes the account from the signed token, not the body.
+        body: JSON.stringify({ name }),
       });
 
+      if (res.status === 401) {
+        throw new Error("Your session expired. Please sign in again.");
+      }
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.message || "Failed to update profile");

@@ -23,6 +23,9 @@ import {
   verifyJobSession,
   signAdminToken,
   requireAdmin,
+  signTeacherToken,
+  requireTeacher,
+  type AuthedRequest,
   encryptFileEnvelope,
   hashPassword,
   verifyPassword,
@@ -76,6 +79,28 @@ const statusLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
   message: { message: "Too many status updates. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Credential endpoints. Failures only, so a user fat-fingering their password
+// isn't locked out by their own successful logins, but guessing is throttled.
+// The seeded admin account ships with a well-known default password.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  message: { message: "Too many attempts. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Issuing a print code is cheap but must not become an oracle for probing
+// which codes exist, so every request counts here.
+const codeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { message: "Too many requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -174,10 +199,21 @@ export async function registerRoutes(
   // PRINT JOBS — MongoDB
 
   // Check Job ID uniqueness (must come BEFORE the :jobId param route)
-  app.get("/api/print-jobs/check-unique/:jobId", async (req, res) => {
+  // Issue a fresh print code. Replaces the old check-unique endpoint, which
+  // answered "does this code exist?" for any code the caller named — an oracle
+  // for finding live jobs that no rate limiter on lookup could compensate for.
+  // The server picks the code now, so callers learn nothing about other jobs.
+  // One code covers a whole batch, so the client asks once per batch.
+  app.post("/api/print-jobs/new-code", codeLimiter, async (_req, res) => {
     try {
-      const existing = await PrintJob.findOne({ jobId: req.params.jobId }).select('_id').lean();
-      res.json({ exists: !!existing });
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const jobId = generatePrintId();
+        const clash = await PrintJob.findOne({ jobId }).select("_id").lean();
+        if (!clash) {
+          return res.json({ jobId });
+        }
+      }
+      res.status(503).json({ message: "Could not allocate a print code. Please try again." });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -361,7 +397,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teacher/login", async (req, res) => {
+  app.post("/api/teacher/login", authLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) {
@@ -382,10 +418,11 @@ export async function registerRoutes(
       }
 
       res.json({
-        success: true, 
-        name: teacher.name, 
-        email: teacher.email, 
-        empId: teacher.empId 
+        success: true,
+        name: teacher.name,
+        email: teacher.email,
+        empId: teacher.empId,
+        token: signTeacherToken(teacher.email),
       });
     } catch (err: any) {
       console.error("Teacher login error:", err);
@@ -393,11 +430,14 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/teacher/profile", async (req, res) => {
+  app.put("/api/teacher/profile", requireTeacher, async (req, res) => {
     try {
-      const { email, name } = req.body;
-      if (!email || !name) {
-        return res.status(400).json({ message: "Email and name are required" });
+      const { name } = req.body;
+      // Target the signed-in teacher only. Taking the email from the body let
+      // anyone rename any teacher just by knowing their address.
+      const email = (req as AuthedRequest).teacherEmail;
+      if (!name) {
+        return res.status(400).json({ message: "Name is required" });
       }
 
       const teacher = await Teacher.findOneAndUpdate(
@@ -417,7 +457,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teacher/forgot-password", async (req, res) => {
+  app.post("/api/teacher/forgot-password", authLimiter, async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) {
@@ -455,7 +495,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teacher/verify-reset-otp", async (req, res) => {
+  app.post("/api/teacher/verify-reset-otp", authLimiter, async (req, res) => {
     try {
       const { email, otp } = req.body;
       if (!email || !otp) {
@@ -479,7 +519,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teacher/reset-password", async (req, res) => {
+  app.post("/api/teacher/reset-password", authLimiter, async (req, res) => {
     try {
       const { email, otp, newPassword } = req.body;
       if (!email || !otp || !newPassword) {
@@ -512,7 +552,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/login", async (req, res) => {
+  app.post("/api/admin/login", authLimiter, async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {

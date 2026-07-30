@@ -132,27 +132,17 @@ export function useUploadFile() {
   });
 }
 
-export function generatePrintId(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
+// The server allocates the code and guarantees uniqueness. It used to be
+// generated here and probed via a check-unique endpoint, which doubled as a
+// way for anyone to test whether a given code was live.
 export async function getUniqueJobId(): Promise<string> {
-  const MAX_RETRIES = 20;
-  let attempts = 0;
-  let isUnique = false;
-  let jobId = generatePrintId();
-  while (!isUnique) {
-    if (++attempts > MAX_RETRIES) {
-      throw new Error('Failed to generate a unique job ID after maximum retries.');
-    }
-    // Check uniqueness via Express API (was: direct Supabase query)
-    const res = await fetch(`${API_BASE}/api/print-jobs/check-unique/${jobId}`);
-    const data = await res.json();
-    if (data.exists) {
-      jobId = generatePrintId();
-    } else {
-      isUnique = true;
-    }
+  const res = await fetch(`${API_BASE}/api/print-jobs/new-code`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error('Could not get a print code. Please try again.');
+  }
+  const { jobId } = await res.json();
+  if (!jobId) {
+    throw new Error('Could not get a print code. Please try again.');
   }
   return jobId;
 }

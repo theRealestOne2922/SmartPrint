@@ -84,8 +84,43 @@ export function verifyAdminToken(token: unknown): string | null {
   return Buffer.from(u, "base64url").toString("utf8");
 }
 
+// Teacher session tokens. Same construction as the admin token, different
+// scope string, so one can never be replayed as the other.
+const TEACHER_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+
+export function signTeacherToken(email: string): string {
+  const exp = Date.now() + TEACHER_TOKEN_TTL_MS;
+  const e = Buffer.from(email, "utf8").toString("base64url");
+  return `${exp}.${e}.${sign(`teacher.${e}.${exp}`)}`;
+}
+
+export function verifyTeacherToken(token: unknown): string | null {
+  if (!APP_SECRET || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [expStr, e, sig] = parts;
+  const exp = Number(expStr);
+  if (!exp || Date.now() > exp) return null;
+  if (!sigMatches(sig, sign(`teacher.${e}.${exp}`))) return null;
+  return Buffer.from(e, "base64url").toString("utf8");
+}
+
 export interface AuthedRequest extends Request {
   adminUsername?: string;
+  teacherEmail?: string;
+}
+
+// Identifies the calling teacher. The email comes from the signed token, never
+// from the request body, so a caller can only act on their own record.
+export function requireTeacher(req: Request, res: Response, next: NextFunction) {
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const email = verifyTeacherToken(token);
+  if (!email) {
+    return res.status(401).json({ message: "Please sign in again." });
+  }
+  (req as AuthedRequest).teacherEmail = email;
+  next();
 }
 
 // Gate for endpoints that expose or destroy data across all jobs.
