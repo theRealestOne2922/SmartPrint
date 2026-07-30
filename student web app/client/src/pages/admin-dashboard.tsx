@@ -1,7 +1,6 @@
 // Admin Dashboard — MongoDB Edition
 // All Supabase database calls replaced with Express API fetch().
 // Field names now use camelCase (from MongoDB/Mongoose) instead of snake_case (from Supabase REST).
-// Original version backed up in _supabase_backup/
 import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api-config";
 import { useLocation } from "wouter";

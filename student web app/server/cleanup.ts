@@ -1,5 +1,4 @@
 // Cleanup Scheduler — MongoDB Edition
-// Original Supabase version backed up in _supabase_backup/
 import { PrintJob } from "./models/PrintJob";
 import { SystemSetting } from "./models/SystemSetting";
 import fs from "fs/promises";

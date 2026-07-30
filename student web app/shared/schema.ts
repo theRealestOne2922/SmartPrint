@@ -1,6 +1,5 @@
 // Shared TypeScript Interfaces & Zod Schemas
 // Replaces the old Drizzle ORM table definitions.
-// Original Drizzle version backed up in _supabase_backup/
 import { z } from "zod";
 
 // PrintJob

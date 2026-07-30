@@ -1,5 +1,4 @@
 // Kiosk API Routes — MongoDB Edition
-// Original Supabase version backed up in _supabase_backup/
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";

@@ -1,5 +1,4 @@
 // API Routes — MongoDB Edition
-// Original Supabase/Drizzle version backed up in _supabase_backup/
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";

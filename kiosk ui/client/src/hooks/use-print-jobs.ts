@@ -2,7 +2,6 @@
 // All Supabase database calls replaced with Express API fetch().
 import { API_BASE } from "@/lib/api-config";
 // Mongoose returns camelCase fields, so the mapJob() function is simplified.
-// Original version backed up in _supabase_backup/
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 // MongoDB/Mongoose already returns camelCase — no snake_case mapping needed

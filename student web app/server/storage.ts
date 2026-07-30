@@ -1,5 +1,4 @@
 // Database Storage Layer — MongoDB (Mongoose)
-// Original Drizzle version backed up in _supabase_backup/
 import { PrintJob } from "./models/PrintJob";
 import type { PrintJob as PrintJobType, InsertPrintJob } from "@shared/schema";
 

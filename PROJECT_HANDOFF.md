@@ -68,13 +68,12 @@ smartprintvit/
 ├── pi-print-agent/           ← Node.js agent that runs on Raspberry Pi
 │   ├── index.js              ← Listens to MongoDB Change Streams for 'printing' status
 │   ├── models/PrintJob.js    ← Mongoose model (mirrors backend)
-│   ├── .env                  ← MONGODB_URI only
+│   ├── install-pi-agent.sh   ← Bash: sets up a Raspberry Pi from scratch
+│   ├── .env                  ← MONGODB_URI + MASTER_KEY
 │   └── package.json
 │
 ├── deploy-vit.ps1            ← PowerShell: builds both apps → deploys to Firebase
-├── install-pi-agent.sh       ← Bash: sets up Raspberry Pi from scratch
-├── smartprint_nginx.conf     ← Reference Nginx config
-└── _supabase_backup/         ← Old Supabase code (archived, NOT used)
+└── smartprint_nginx.conf     ← Reference Nginx config
 ```
 
 ---
@@ -122,9 +121,19 @@ Student Phone                 Oracle VM                    Raspberry Pi
 
 ## All Environment Variables
 
+> **MASTER_KEY / APP_SECRET must be byte-identical everywhere they appear.**
+> `MASTER_KEY` unwraps the per-file key for confidential documents — if the Pi's
+> copy differs from the backend's, those jobs fail to decrypt and won't print.
+> `APP_SECRET` signs the kiosk release token, so a mismatch makes the token
+> issued by one server invalid at the other. Generate each with:
+> `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
 ### `student web app/.env` (local dev + Oracle VM)
 ```
 MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+MASTER_KEY=<64 hex chars>
+APP_SECRET=<64 hex chars>
+BREVO_API_KEY=<optional, for password-reset OTP email>
 ```
 
 ### `student web app/.env.production` (build-time for Firebase)
@@ -141,12 +150,15 @@ PORT=5000
 ### `kiosk ui/.env`
 ```
 MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+APP_SECRET=<same value as the student web app>
 PORT=5001
 ```
 
 ### `pi-print-agent/.env`
 ```
 MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+MASTER_KEY=<same value as the student web app>
+CLEANUP_HOURS=24
 ```
 
 ---
@@ -170,11 +182,13 @@ pm2 restart smartprint
 ```
 
 ### Update Pi Print Agent (on Raspberry Pi)
+The installer registers the PM2 process as `smartprint-agent` and installs to
+`~/smartprint-agent`, so use that name — not `print-agent`.
 ```bash
-cd ~/smartprintvit/pi-print-agent
+cd ~/smartprint-agent
 git pull origin main
 npm install
-pm2 restart print-agent
+pm2 restart smartprint-agent
 ```
 
 ---

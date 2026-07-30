@@ -1,7 +1,6 @@
 // Print Hooks — MongoDB Edition
-// Database queries now go through Express API instead of direct Supabase calls.
-// Supabase client is kept ONLY for Storage uploads.
-// Original version backed up in _supabase_backup/
+// All reads/writes go through the Express API; uploads POST to /api/upload,
+// which stores the file on the backend's local disk.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { API_BASE } from "@/lib/api-config";
 import { PDFDocument } from 'pdf-lib';
@@ -207,7 +206,9 @@ export function useCreatePrintJob() {
   });
 }
 
-export function usePrintJob(jobId: string) {
+// jobId is null until the caller reads it out of sessionStorage; the query
+// stays disabled until then, so callers don't need to narrow it first.
+export function usePrintJob(jobId: string | null) {
   return useQuery({
     queryKey: ['print-job', jobId],
     queryFn: async (): Promise<PrintJobResponse[]> => {
