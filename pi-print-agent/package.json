@@ -1,6 +1,6 @@
 {
     "name": "pi-print-agent",
-    "version": "1.0.0",
+    "version": "4.2.0",
     "description": "Native Raspberry Pi Print Daemon for SmartPrint",
     "main": "index.js",
     "type": "module",

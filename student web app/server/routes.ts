@@ -272,8 +272,14 @@ export async function registerRoutes(
         price: providedPrice,
       } = req.body;
 
+      // Validate before pricing so the quote and the job agree on the count.
+      const copyCount = Math.floor(Number(copies));
+      if (!Number.isFinite(copyCount) || copyCount < 1 || copyCount > 500) {
+        return res.status(400).json({ message: "Copies must be between 1 and 500." });
+      }
+
       const pricePerPage = colorMode === "bw" ? 2 : 10;
-      const price = providedPrice || pageCount * copies * pricePerPage;
+      const price = providedPrice || pageCount * copyCount * pricePerPage;
 
       let jobId = providedJobId;
       if (!jobId) {
@@ -341,7 +347,7 @@ export async function registerRoutes(
         filePath: finalFilePath,
         pageCount,
         colorMode,
-        copies,
+        copies: copyCount,
         duplex: duplex || false,
         orientation: orientation || 'portrait',
         paperSize: paperSize || 'a4',
@@ -726,12 +732,22 @@ export async function registerRoutes(
       const updates: any = {};
       if (req.body.pageCount !== undefined) updates.pageCount = req.body.pageCount;
       if (req.body.colorMode !== undefined) updates.colorMode = req.body.colorMode;
-      if (req.body.copies !== undefined) updates.copies = req.body.copies;
+      if (req.body.copies !== undefined) {
+        // The wizard's own limit. Without it the agent would happily be told to
+        // run a hundred thousand copies of a question paper.
+        const copies = Math.floor(Number(req.body.copies));
+        if (!Number.isFinite(copies) || copies < 1 || copies > 500) {
+          return res.status(400).json({ message: "Copies must be between 1 and 500." });
+        }
+        updates.copies = copies;
+      }
       if (req.body.duplex !== undefined) updates.duplex = req.body.duplex;
       if (req.body.orientation !== undefined) updates.orientation = req.body.orientation;
       if (req.body.paperSize !== undefined) updates.paperSize = req.body.paperSize;
 
-      const job = await PrintJob.findByIdAndUpdate(id, updates, { new: true });
+      // runValidators is off by default on updates, so the colorMode/orientation/
+      // paperSize enums in the schema were enforced on create and ignored here.
+      const job = await PrintJob.findByIdAndUpdate(id, updates, { new: true, runValidators: true });
       if (!job) {
         return res.status(404).json({ message: "Print job not found" });
       }

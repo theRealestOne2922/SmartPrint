@@ -1,4 +1,4 @@
-// SmartPrint Pi Print Agent v4.1 — MongoDB Edition
+// SmartPrint Pi Print Agent v4.2 — MongoDB Edition
 // Database: MongoDB (Mongoose)
 // Realtime: MongoDB Change Streams
 // Storage: Files are served from the backend host's local disk
@@ -71,7 +71,7 @@ const MAX_REDIRECTS = 5;
 function downloadFile(url, destPath, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve, reject) => {
         const proto = url.startsWith('https') ? https : http;
-        const file = createWriteStream(destPath);
+        const file = createWriteStream(destPath, { mode: 0o600 });
         let settled = false;
 
         const fail = (err) => {
@@ -186,6 +186,33 @@ async function convertToPdf(inputPath) {
 // Lock set — prevents the same job from being processed twice
 const activeJobs = new Set();
 
+// How long a claim is trusted. Past this the job is assumed abandoned (agent
+// killed mid-print) and may be retried; under it, a restart will not reprint.
+const STALE_CLAIM_MS = 10 * 60 * 1000;
+
+// Takes ownership of a job in a single atomic update. The in-memory activeJobs
+// set only dedups within one process, so it did nothing about the case that
+// actually loses paper: the agent spools a confidential job, dies before
+// marking it completed, and the restart catch-up finds it still 'printing' and
+// prints it again — a second copy of an exam paper into an unattended tray.
+async function claimJob(job) {
+    const staleCutoff = new Date(Date.now() - STALE_CLAIM_MS);
+    const claimed = await PrintJob.findOneAndUpdate(
+        {
+            _id: job._id,
+            status: 'printing',
+            $or: [
+                { agentClaimedAt: null },
+                { agentClaimedAt: { $exists: false } },
+                { agentClaimedAt: { $lt: staleCutoff } },
+            ],
+        },
+        { $set: { agentClaimedAt: new Date() } },
+        { returnDocument: 'after' }
+    ).lean();
+    return claimed;
+}
+
 async function processJob(job) {
     // Use MongoDB's _id as the unique key for dedup
     const jobKey = String(job._id || job.id);
@@ -196,6 +223,22 @@ async function processJob(job) {
         return;
     }
     activeJobs.add(jobKey);
+
+    try {
+        const claimed = await claimJob(job);
+        if (!claimed) {
+            console.log(`[JOB ${job.jobId}] ⏭️  Already claimed or no longer printing — skipping.`);
+            activeJobs.delete(jobKey);
+            return;
+        }
+        // Use the freshly-read document: a change-stream payload can be stale if
+        // the job was edited between the update and this handler running.
+        job = claimed;
+    } catch (err) {
+        console.error(`[JOB ${job.jobId}] Failed to claim job:`, err.message);
+        activeJobs.delete(jobKey);
+        return;
+    }
 
     console.log(`\n-----------------------------------`);
     console.log(`[JOB ${job.jobId}] Processing: "${job.fileName}"`);
@@ -232,7 +275,7 @@ async function processJob(job) {
                 wrappedKeyIv: job.wrappedKeyIv,
                 wrappedKeyAuthTag: job.wrappedKeyAuthTag,
             });
-            await fs.writeFile(tempFilePath, decryptedBuffer);
+            await fs.writeFile(tempFilePath, decryptedBuffer, { mode: 0o600 });
             console.log(`[JOB ${job.jobId}] 🔓 Decryption successful.`);
         }
 
@@ -246,7 +289,10 @@ async function processJob(job) {
         }
 
         // 3. Print — simple, clean command. Just -n for copies.
-        const copies = Math.max(1, parseInt(job.copies) || 1);
+        // The wizard caps copies at 500, but /api/jobs/:id/details ran an
+        // unvalidated update, so the stored value could be anything. Clamp here
+        // too — a bad number means a jammed printer and a ream of wasted paper.
+        const copies = Math.min(500, Math.max(1, parseInt(job.copies) || 1));
         console.log(`[JOB ${job.jobId}] Copies: ${copies}, Color: ${job.colorMode}, Duplex: ${job.duplex}`);
 
         // Paper size (default A4). The schema restricts this to a4/a3, but the
@@ -313,8 +359,13 @@ async function processJob(job) {
                 }
                 
                 const outBytes = await outDoc.save();
-                const bookletPath = printPath.replace('.pdf', '_booklet.pdf');
-                await fs.writeFile(bookletPath, outBytes);
+                // Build the name from the path, not a string replace on '.pdf' —
+                // that replaced the first match anywhere in the path.
+                const bookletPath = path.join(
+                    path.dirname(printPath),
+                    `${path.basename(printPath, path.extname(printPath))}_booklet.pdf`
+                );
+                await fs.writeFile(bookletPath, outBytes, { mode: 0o600 });
                 
                 // Swap the print path to the new booklet
                 if (printPath !== tempFilePath) {
@@ -400,20 +451,40 @@ async function catchUpMissedJobs() {
 
 // MongoDB Change Stream listener
 let changeStream = null;
+let reconnectTimer = null;
+let shuttingDown = false;
+
+// A dropped stream emits 'error' and then 'close', and closing the old stream
+// inside startListener emitted 'close' again — so each reconnect scheduled two
+// or three more, every one of them creating another live stream. After a few
+// network blips the Pi held a fistful of streams all replaying the same events.
+// One reconnect may be in flight at a time, and the old stream's handlers come
+// off before it is closed.
+function scheduleReconnect(reason) {
+    if (shuttingDown || reconnectTimer) return;
+    console.warn(`[SYSTEM] Change Stream ${reason}. Reconnecting in 5s...`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        startListener();
+    }, 5000);
+}
 
 function startListener() {
     if (changeStream) {
-        changeStream.close();
+        changeStream.removeAllListeners();
+        Promise.resolve(changeStream.close()).catch(() => {});
+        changeStream = null;
     }
 
     console.log('[SYSTEM] Starting MongoDB Change Stream listener...');
 
-    changeStream = PrintJob.watch(
+    const stream = PrintJob.watch(
         [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
         { fullDocument: 'updateLookup' }
     );
+    changeStream = stream;
 
-    changeStream.on('change', (change) => {
+    stream.on('change', (change) => {
         if (change.operationType === 'update' && change.fullDocument) {
             const job = change.fullDocument;
             if (job.status === 'printing') {
@@ -423,14 +494,14 @@ function startListener() {
         }
     });
 
-    changeStream.on('error', (err) => {
-        console.error(`[SYSTEM] Change Stream error: ${err.message}. Reconnecting in 5s...`);
-        setTimeout(startListener, 5000);
+    stream.on('error', (err) => {
+        if (stream !== changeStream) return; // superseded, not ours to react to
+        scheduleReconnect(`error: ${err.message}`);
     });
 
-    changeStream.on('close', () => {
-        console.warn('[SYSTEM] Change Stream closed. Reconnecting in 5s...');
-        setTimeout(startListener, 5000);
+    stream.on('close', () => {
+        if (stream !== changeStream) return;
+        scheduleReconnect('closed');
     });
 
     console.log('[SYSTEM] ✅ Connected & listening for new jobs via Change Stream!');
@@ -465,38 +536,53 @@ async function cleanupOldJobs() {
         // Calculate the cutoff date
         const cutoffDate = new Date(Date.now() - hoursToKeep * 60 * 60 * 1000);
 
-        // Find old jobs (MongoDB)
-        const oldJobs = await PrintJob.find({ createdAt: { $lt: cutoffDate } })
-            .select('_id filePath')
-            .lean();
+        // Never delete a job this agent is printing right now — the old code
+        // could remove the record mid-run, so the completion write silently hit
+        // nothing and the job vanished from the dashboard as if it never ran.
+        const inFlight = Array.from(activeJobs)
+            .filter((id) => mongoose.Types.ObjectId.isValid(id))
+            .map((id) => new mongoose.Types.ObjectId(id));
 
-        if (!oldJobs || oldJobs.length === 0) {
+        // One deleteMany instead of a find plus a deleteOne per row: the Pi is
+        // often on flaky campus wifi, and this was a round trip per job.
+        // (File cleanup is handled by the Express backend.)
+        const filter = { createdAt: { $lt: cutoffDate } };
+        if (inFlight.length) filter._id = { $nin: inFlight };
+
+        const { deletedCount } = await PrintJob.deleteMany(filter);
+
+        if (!deletedCount) {
             console.log(`[CLEANUP] No old jobs found. System is clean.`);
             return;
         }
-
-        console.log(`[CLEANUP] Found ${oldJobs.length} old jobs. Deleting...`);
-
-        let deletedCount = 0;
-        for (const job of oldJobs) {
-            try {
-                // Delete from MongoDB (file cleanup is handled by the Express backend)
-                await PrintJob.deleteOne({ _id: job._id });
-                deletedCount++;
-            } catch (err) {
-                console.error(`[CLEANUP] Failed to delete job ${job._id}:`, err.message);
-            }
-        }
-
-        console.log(`[CLEANUP] ✅ Successfully deleted ${deletedCount} old files and database records.`);
+        console.log(`[CLEANUP] ✅ Deleted ${deletedCount} expired job record(s).`);
     } catch (err) {
         console.error(`[CLEANUP] ❌ Cleanup routine failed:`, err.message);
     }
 }
 
+// Decrypted exam papers pass through /tmp. Everything this process and its
+// children (LibreOffice) create is owner-only, instead of the world-readable
+// 0644 the default umask produces on a Pi that may have other logins.
+process.umask(0o077);
+
+// Anything left in /tmp from a previous run is a decrypted document that
+// outlived the process that was printing it. Clear it before doing anything.
+async function sweepTempFiles() {
+    try {
+        const leftovers = (await fs.readdir('/tmp')).filter((f) => f.startsWith('smartprint_'));
+        for (const name of leftovers) {
+            try { await fs.unlink(path.join('/tmp', name)); } catch {}
+        }
+        if (leftovers.length) {
+            console.log(`🧹 Removed ${leftovers.length} leftover document(s) from a previous run`);
+        }
+    } catch {}
+}
+
 // Startup
 console.log('=============================================');
-console.log('   SMARTPRINT: PI PRINT AGENT v4.1');
+console.log('   SMARTPRINT: PI PRINT AGENT v4.2');
 console.log('   MongoDB Edition — no GhostScript');
 console.log('=============================================');
 
@@ -532,6 +618,9 @@ try {
     console.warn('⚠️  Could not check CUPS queue');
 }
 
+// Clear decrypted documents orphaned by a previous run
+await sweepTempFiles();
+
 // Run cleanup immediately on startup
 cleanupOldJobs();
 
@@ -542,14 +631,32 @@ const cleanupInterval = setInterval(cleanupOldJobs, 60 * 60 * 1000);
 startListener();
 await catchUpMissedJobs();
 
-process.on('SIGINT', () => {
+function shutdown(code) {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('Shutting down...');
     clearInterval(cleanupInterval);
-    if (changeStream) changeStream.close();
-    mongoose.disconnect();
-    process.exit(0);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (changeStream) {
+        changeStream.removeAllListeners();
+        Promise.resolve(changeStream.close()).catch(() => {});
+    }
+    mongoose.disconnect().finally(() => process.exit(code));
+}
+
+process.on('SIGINT', () => shutdown(0));
+// PM2 and systemd both stop services with SIGTERM; without this the agent was
+// killed outright and left its temp files behind.
+process.on('SIGTERM', () => shutdown(0));
+
+process.on('unhandledRejection', (reason) => {
+    console.error('UNHANDLED PROMISE REJECTION:', reason);
 });
 
 process.on('uncaughtException', (err) => {
     console.error('CRITICAL UNCAUGHT EXCEPTION:', err);
+    // This used to log and carry on. A process in an unknown state that still
+    // looks alive to PM2 is the worst outcome for a print daemon — it stops
+    // printing and nothing restarts it. Exit and let PM2 bring up a clean one.
+    shutdown(1);
 });

@@ -26,6 +26,10 @@ const printJobSchema = new mongoose.Schema({
     wrappedKeyIv: { type: String, default: null },
     wrappedKeyAuthTag: { type: String, default: null },
     stripeSessionId: { type: String, default: null },
+    // Set by this agent when it takes ownership of a job, so a restart or a
+    // duplicate change-stream event cannot send the same exam paper to the
+    // printer twice. The backend neither reads nor writes it.
+    agentClaimedAt: { type: Date, default: null },
 }, {
     timestamps: true,
     toJSON: {

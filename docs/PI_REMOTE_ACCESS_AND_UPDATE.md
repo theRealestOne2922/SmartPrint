@@ -154,6 +154,10 @@ pm2 logs --lines 40
 
 Expect the MongoDB connection and Change Stream listener to come up.
 
+The banner prints the agent version. If it does not say **v4.2** or later, the
+update did not take — you are looking at the old process, usually because the
+files were fetched into a different directory than the one PM2 is running.
+
 **This line means confidential printing is broken**, even though the agent
 otherwise looks healthy:
 
