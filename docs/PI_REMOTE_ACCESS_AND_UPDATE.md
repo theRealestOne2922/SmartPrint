@@ -131,8 +131,13 @@ curl -fsSL -O https://raw.githubusercontent.com/theRealestOne2922/SmartPrint/mai
 curl -fsSL -O https://raw.githubusercontent.com/theRealestOne2922/SmartPrint/main/pi-print-agent/package.json
 mkdir -p models
 curl -fsSL -o models/PrintJob.js https://raw.githubusercontent.com/theRealestOne2922/SmartPrint/main/pi-print-agent/models/PrintJob.js
+curl -fsSL -O https://raw.githubusercontent.com/theRealestOne2922/SmartPrint/main/pi-print-agent/test-agent.mjs
 npm install
 ```
+
+Fetch all four. `index.js` imports `models/PrintJob.js`, so updating one without
+the other gives you an agent that either will not start or silently drops the
+encryption fields it needs to decrypt confidential jobs.
 
 Re-running `sudo bash install-pi-agent.sh` also works and will not overwrite an
 existing `.env`, but it reinstalls Node, CUPS, LibreOffice and fonts, so it is
@@ -147,6 +152,15 @@ pm2 restart <process-name> && pm2 save
 ---
 
 ## Part 3 — Verify
+
+First, the self-check. It needs no database, no printer and no network off the
+Pi, and it fails loudly if the files are broken or half-updated:
+
+```bash
+cd <install-dir> && npm test
+```
+
+Then the logs:
 
 ```bash
 pm2 logs --lines 40

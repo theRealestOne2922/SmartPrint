@@ -20,6 +20,7 @@ const checkOnly = process.argv.includes('--check');
 const sources = [
   { marker: '$INSTALL_DIR/index.js', file: 'index.js' },
   { marker: '$INSTALL_DIR/models/PrintJob.js', file: 'models/PrintJob.js' },
+  { marker: '$INSTALL_DIR/test-agent.mjs', file: 'test-agent.mjs' },
   { marker: '$INSTALL_DIR/package.json', file: 'package.json' },
   { marker: '$INSTALL_DIR/.env.example', file: '.env.example' },
 ];

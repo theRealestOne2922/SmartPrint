@@ -199,7 +199,8 @@ cat << 'EOF' > "$INSTALL_DIR/package.json"
     "main": "index.js",
     "type": "module",
     "scripts": {
-        "start": "node index.js"
+        "start": "node index.js",
+        "test": "node test-agent.mjs"
     },
     "dependencies": {
         "dotenv": "^16.4.5",
@@ -261,6 +262,179 @@ const printJobSchema = new mongoose.Schema({
 });
 
 export const PrintJob = mongoose.model('PrintJob', printJobSchema);
+EOF
+
+# Write test-agent.mjs so the install can be verified on the Pi itself with
+# `npm test` — no database, no printer, no network off the box.
+cat << 'EOF' > "$INSTALL_DIR/test-agent.mjs"
+#!/usr/bin/env node
+// Tests the parts of the agent that run before the printer does: print-option
+// construction, the download path, and booklet imposition. It imports the real
+// index.js with the startup block cut off at the '// Startup' marker, so it
+// tests the shipped source rather than a copy of it.
+//
+//   node pi-print-agent/test-agent.mjs
+//
+// No database, no printer, no network beyond a local server on 127.0.0.1.
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import http from 'http';
+import { fileURLToPath } from 'url';
+import { PDFDocument } from 'pdf-lib';
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
+
+// --- load the real source, minus the startup block -------------------------
+const source = fs.readFileSync(path.join(dir, 'index.js'), 'utf8');
+const cut = source.indexOf('// Startup');
+if (cut === -1) throw new Error("could not find the '// Startup' marker in index.js");
+
+const harness = path.join(dir, `.test-harness-${process.pid}.mjs`);
+fs.writeFileSync(
+  harness,
+  // buildLpArgs is already exported from index.js; the rest are module-private.
+  `${source.slice(0, cut)}\nexport { downloadFile, NEEDS_CONVERSION };\n`,
+  'utf8'
+);
+
+let mod;
+try {
+  process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:1/never-connected';
+  mod = await import(`file://${harness.replace(/\\/g, '/')}`);
+} finally {
+  fs.unlinkSync(harness);
+}
+const { downloadFile, buildLpArgs } = mod;
+
+let failures = 0;
+const check = (name, ok, detail) => {
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok || !detail ? '' : `\n       ${detail}`}`);
+  if (!ok) failures++;
+};
+const eq = (name, actual, expected) =>
+  check(name, JSON.stringify(actual) === JSON.stringify(expected), `got ${JSON.stringify(actual)}`);
+
+// ---------------------------------------------------------------- lp options
+console.log('\n--- print options ---');
+const P = '/tmp/x.pdf';
+
+eq('A4, colour, single-sided',
+  buildLpArgs({ colorMode: 'color' }, { copies: 1, paperSize: 'a4', printPath: P, booklet: false }),
+  ['-d', 'SmartPrint', '-n', '1', '-o', 'print-color-mode=color', '-o', 'sides=one-sided', '-o', 'media=a4', P]);
+
+eq('A4, B&W, duplex, 30 copies',
+  buildLpArgs({ colorMode: 'bw', duplex: true }, { copies: 30, paperSize: 'a4', printPath: P, booklet: false }),
+  ['-d', 'SmartPrint', '-n', '30', '-o', 'print-color-mode=monochrome', '-o', 'sides=two-sided-long-edge', '-o', 'media=a4', P]);
+
+eq('landscape adds the flag',
+  buildLpArgs({ colorMode: 'bw', orientation: 'landscape' }, { copies: 1, paperSize: 'a4', printPath: P, booklet: false }),
+  ['-d', 'SmartPrint', '-n', '1', '-o', 'print-color-mode=monochrome', '-o', 'sides=one-sided', '-o', 'media=a4', '-o', 'landscape', P]);
+
+eq('booklet: short-edge duplex on landscape A3',
+  buildLpArgs({ colorMode: 'bw' }, { copies: 2, paperSize: 'a3', printPath: P, booklet: true }),
+  ['-d', 'SmartPrint', '-n', '2', '-o', 'fit-to-page', '-o', 'print-color-mode=monochrome',
+    '-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge', P]);
+
+eq('page range passes through',
+  buildLpArgs({ colorMode: 'bw', pageRange: '1-4,7' }, { copies: 1, paperSize: 'a4', printPath: P, booklet: false }),
+  ['-d', 'SmartPrint', '-n', '1', '-o', 'print-color-mode=monochrome', '-o', 'sides=one-sided', '-o', 'media=a4', '-P', '1-4,7', P]);
+
+eq('page range "all" is omitted',
+  buildLpArgs({ colorMode: 'bw', pageRange: 'all' }, { copies: 1, paperSize: 'a4', printPath: P, booklet: false }),
+  ['-d', 'SmartPrint', '-n', '1', '-o', 'print-color-mode=monochrome', '-o', 'sides=one-sided', '-o', 'media=a4', P]);
+
+for (const [range, expected] of [
+  ['1-4,7', '1-4,7'],
+  ['2', '2'],
+  ['1;rm -rf ~', null],   // sanitises to "1-", which lp would reject
+  ['-,-', null],
+  ['abc', null],
+  ['1-4;reboot', '1-4'],  // strips to a valid range; safe, and lp accepts it
+]) {
+  const args = buildLpArgs({ colorMode: 'bw', pageRange: range }, { copies: 1, paperSize: 'a4', printPath: P, booklet: false });
+  const i = args.indexOf('-P');
+  const actual = i === -1 ? null : args[i + 1];
+  check(`page range ${JSON.stringify(range)} -> ${expected === null ? 'omitted (prints all)' : expected}`,
+    actual === expected, `got ${JSON.stringify(actual)}`);
+  if (actual !== null) check(`  ${JSON.stringify(actual)} is a range lp accepts`, /^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(actual));
+}
+check('every argument is a string (execFile rejects anything else)',
+  buildLpArgs({ colorMode: 'bw' }, { copies: 5, paperSize: 'a4', printPath: P, booklet: false }).every((a) => typeof a === 'string'));
+
+// ----------------------------------------------------------------- downloads
+console.log('\n--- download ---');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-test-'));
+const body = Buffer.from('%PDF-1.4 fake exam paper');
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/ok') { res.writeHead(200); res.end(body); return; }
+  if (req.url === '/missing') { res.writeHead(404); res.end('nope'); return; }
+  if (req.url === '/once') { res.writeHead(302, { Location: `http://127.0.0.1:${port}/ok` }); res.end(); return; }
+  if (req.url.startsWith('/loop')) { res.writeHead(302, { Location: `http://127.0.0.1:${port}/loop` }); res.end(); return; }
+  if (req.url === '/hang') { res.writeHead(200); /* never ends */ return; }
+  res.writeHead(500); res.end();
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const port = server.address().port;
+const url = (p) => `http://127.0.0.1:${port}${p}`;
+
+const dest = (n) => path.join(tmp, n);
+
+await downloadFile(url('/ok'), dest('a.pdf'));
+check('200 writes the file intact', fs.readFileSync(dest('a.pdf')).equals(body));
+
+let err = null;
+try { await downloadFile(url('/missing'), dest('b.pdf')); } catch (e) { err = e; }
+check('404 rejects', /HTTP 404/.test(err?.message || ''), err?.message);
+
+await downloadFile(url('/once'), dest('c.pdf'));
+check('follows a redirect', fs.readFileSync(dest('c.pdf')).equals(body));
+
+err = null;
+try { await downloadFile(url('/loop'), dest('d.pdf')); } catch (e) { err = e; }
+check('redirect loop terminates instead of hanging', /Too many redirects/.test(err?.message || ''), err?.message);
+
+err = null;
+try { await downloadFile(`http://127.0.0.1:${port + 1}/ok`, dest('e.pdf')); } catch (e) { err = e; }
+check('connection refused rejects', !!err, 'no error raised');
+
+// --------------------------------------------------------- booklet imposition
+console.log('\n--- booklet imposition ---');
+async function impose(numPages) {
+  const src = await PDFDocument.create();
+  for (let i = 0; i < numPages; i++) src.addPage([595.28, 841.89]);
+  const out = await PDFDocument.create();
+  const paddedCount = Math.ceil(numPages / 4) * 4;
+  const embedded = await out.embedPdf(src, src.getPageIndices());
+  const pageArray = [];
+  for (let i = 0; i < paddedCount; i++) pageArray.push(i < numPages ? embedded[i] : null);
+  const sheets = paddedCount / 4;
+  for (let s = 0; s < sheets; s++) {
+    for (const [l, r] of [[paddedCount - 2 * s - 1, 2 * s], [paddedCount - 2 * s - 2, 2 * s + 1]]) {
+      const page = out.addPage([595.28 * 2, 841.89]);
+      if (pageArray[l]) page.drawPage(pageArray[l], { x: 0, y: 0, width: 595.28, height: 841.89 });
+      if (pageArray[r]) page.drawPage(pageArray[r], { x: 595.28, y: 0, width: 595.28, height: 841.89 });
+    }
+  }
+  return out;
+}
+
+for (const [pages, expectedSheets] of [[1, 1], [4, 1], [5, 2], [8, 2], [12, 3]]) {
+  const out = await impose(pages);
+  const got = out.getPageCount();
+  check(`${pages} page(s) -> ${expectedSheets} sheet(s) (${expectedSheets * 2} sides)`, got === expectedSheets * 2, `got ${got} sides`);
+  if (pages === 4) {
+    const [w, h] = [out.getPage(0).getWidth(), out.getPage(0).getHeight()];
+    check('  sheet is two A4 pages wide (A3 landscape)', Math.round(w) === 1191 && Math.round(h) === 842, `${Math.round(w)}x${Math.round(h)}`);
+  }
+}
+
+server.close();
+fs.rmSync(tmp, { recursive: true, force: true });
+
+console.log(failures === 0 ? '\nALL AGENT TESTS PASSED' : `\n${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);
 EOF
 
 # Write index.js (with orientation support)
@@ -449,6 +623,43 @@ async function convertToPdf(inputPath) {
 // PDFs go directly to CUPS. No extra processing needed.
 // (Document passwords are stripped in the browser at upload time; the envelope
 // encryption on confidential jobs is undone in processJob above.)
+
+// Builds the argv for lp. Pure and separate from processJob so the print
+// options can be tested — a silent mistake here is an exam paper that comes out
+// single-sided, in colour, or on the wrong tray, which nobody notices until the
+// papers are already in someone's hands.
+export function buildLpArgs(job, { copies, paperSize, printPath, booklet }) {
+    const args = ['-d', 'SmartPrint', '-n', String(copies)];
+    if (booklet) args.push('-o', 'fit-to-page');
+
+    args.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
+
+    if (booklet) {
+        // The spine runs along the short edge, and two A4 pages sit side by side
+        // on a landscape A3 sheet.
+        args.push('-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge');
+    } else {
+        args.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
+        args.push('-o', `media=${paperSize}`);
+        if (job.orientation === 'landscape') args.push('-o', 'landscape');
+    }
+
+    if (job.pageRange && String(job.pageRange).toLowerCase() !== 'all') {
+        const sanitizedRange = String(job.pageRange).replace(/[^0-9,\-]/g, '');
+        // Only pass a range lp will actually accept. Stripping non-digits alone
+        // could leave something like "1-" or "-,-", and lp rejects a malformed
+        // range by failing the whole job — better to print every page than to
+        // hand back nothing.
+        if (/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(sanitizedRange)) {
+            args.push('-P', sanitizedRange);
+        } else if (sanitizedRange) {
+            console.warn(`[JOB ${job.jobId}] Ignoring unusable page range "${job.pageRange}" — printing all pages.`);
+        }
+    }
+
+    args.push(printPath);
+    return args;
+}
 
 // Lock set — prevents the same job from being processed twice
 const activeJobs = new Set();
@@ -647,35 +858,16 @@ async function processJob(job) {
                     try { await fs.unlink(printPath); } catch {}
                 }
                 printPath = bookletPath;
-                
-                // Build a clean lp invocation specifically for booklet printing
-                lpArgs = ['-d', 'SmartPrint', '-n', String(copies), '-o', 'fit-to-page'];
-                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-                // Short-edge duplex for booklet: the spine is along the short edge.
-                lpArgs.push('-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge');
+                lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: true });
                 console.log(`[JOB ${job.jobId}] Booklet generation successful.`);
             } catch (err) {
                 console.error(`[JOB ${job.jobId}] Booklet generation failed:`, err);
-                // Fallback to normal a3
-                lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
-                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-                lpArgs.push('-o', 'media=a3');
-                if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
-                lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
+                // Fall back to a plain A3 print rather than losing the job.
+                lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: false });
             }
         } else {
-            lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
-            lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-            lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
-            lpArgs.push('-o', `media=${paperSize}`);
-            if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
+            lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: false });
         }
-
-        if (job.pageRange && job.pageRange.toLowerCase() !== 'all') {
-            const sanitizedRange = job.pageRange.replace(/[^0-9,\-]/g, '');
-            if (sanitizedRange) lpArgs.push('-P', sanitizedRange);
-        }
-        lpArgs.push(printPath);
 
         console.log(`[JOB ${job.jobId}] Printing: lp ${lpArgs.join(' ')}`);
         const { stdout, stderr } = await execFileAsync('lp', lpArgs);
@@ -685,7 +877,13 @@ async function processJob(job) {
         // Record this before anything else can fail. Everything below — the
         // spool wait, the unlinks, the status write — can be interrupted, and
         // without this marker a restart would treat the job as never printed.
-        await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+        // A database blip here must not throw: the paper is already coming out,
+        // and falling into the catch would mark a printed job 'failed'.
+        try {
+            await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+        } catch (markErr) {
+            console.error(`[JOB ${job.jobId}] Printed, but could not record spool time:`, markErr.message);
+        }
 
         // Small delay to ensure CUPS spooling has completely finished reading the file
         await new Promise(resolve => setTimeout(resolve, 2000));

@@ -138,6 +138,9 @@ build/
 # Backup archives (may contain .env files — never commit these)
 *.zip
 
+# Temp module the Pi agent's test harness writes next to index.js
+pi-print-agent/.test-harness-*.mjs
+
 # Generated code graph — regenerate with `graphify extract . --code-only`.
 # Committing it would put a 1.4MB machine-written JSON in everyone's diffs and
 # conflict on almost every merge.

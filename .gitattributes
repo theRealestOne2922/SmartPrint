@@ -8,4 +8,5 @@
 # Same reasoning for the agent files the installer embeds, so the embedded copy
 # and the source stay byte-identical regardless of checkout settings.
 pi-print-agent/*.js text eol=lf
+pi-print-agent/*.mjs text eol=lf
 pi-print-agent/models/*.js text eol=lf

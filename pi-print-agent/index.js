@@ -183,6 +183,43 @@ async function convertToPdf(inputPath) {
 // (Document passwords are stripped in the browser at upload time; the envelope
 // encryption on confidential jobs is undone in processJob above.)
 
+// Builds the argv for lp. Pure and separate from processJob so the print
+// options can be tested — a silent mistake here is an exam paper that comes out
+// single-sided, in colour, or on the wrong tray, which nobody notices until the
+// papers are already in someone's hands.
+export function buildLpArgs(job, { copies, paperSize, printPath, booklet }) {
+    const args = ['-d', 'SmartPrint', '-n', String(copies)];
+    if (booklet) args.push('-o', 'fit-to-page');
+
+    args.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
+
+    if (booklet) {
+        // The spine runs along the short edge, and two A4 pages sit side by side
+        // on a landscape A3 sheet.
+        args.push('-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge');
+    } else {
+        args.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
+        args.push('-o', `media=${paperSize}`);
+        if (job.orientation === 'landscape') args.push('-o', 'landscape');
+    }
+
+    if (job.pageRange && String(job.pageRange).toLowerCase() !== 'all') {
+        const sanitizedRange = String(job.pageRange).replace(/[^0-9,\-]/g, '');
+        // Only pass a range lp will actually accept. Stripping non-digits alone
+        // could leave something like "1-" or "-,-", and lp rejects a malformed
+        // range by failing the whole job — better to print every page than to
+        // hand back nothing.
+        if (/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(sanitizedRange)) {
+            args.push('-P', sanitizedRange);
+        } else if (sanitizedRange) {
+            console.warn(`[JOB ${job.jobId}] Ignoring unusable page range "${job.pageRange}" — printing all pages.`);
+        }
+    }
+
+    args.push(printPath);
+    return args;
+}
+
 // Lock set — prevents the same job from being processed twice
 const activeJobs = new Set();
 
@@ -380,35 +417,16 @@ async function processJob(job) {
                     try { await fs.unlink(printPath); } catch {}
                 }
                 printPath = bookletPath;
-                
-                // Build a clean lp invocation specifically for booklet printing
-                lpArgs = ['-d', 'SmartPrint', '-n', String(copies), '-o', 'fit-to-page'];
-                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-                // Short-edge duplex for booklet: the spine is along the short edge.
-                lpArgs.push('-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge');
+                lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: true });
                 console.log(`[JOB ${job.jobId}] Booklet generation successful.`);
             } catch (err) {
                 console.error(`[JOB ${job.jobId}] Booklet generation failed:`, err);
-                // Fallback to normal a3
-                lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
-                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-                lpArgs.push('-o', 'media=a3');
-                if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
-                lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
+                // Fall back to a plain A3 print rather than losing the job.
+                lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: false });
             }
         } else {
-            lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
-            lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
-            lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
-            lpArgs.push('-o', `media=${paperSize}`);
-            if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
+            lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: false });
         }
-
-        if (job.pageRange && job.pageRange.toLowerCase() !== 'all') {
-            const sanitizedRange = job.pageRange.replace(/[^0-9,\-]/g, '');
-            if (sanitizedRange) lpArgs.push('-P', sanitizedRange);
-        }
-        lpArgs.push(printPath);
 
         console.log(`[JOB ${job.jobId}] Printing: lp ${lpArgs.join(' ')}`);
         const { stdout, stderr } = await execFileAsync('lp', lpArgs);
@@ -418,7 +436,13 @@ async function processJob(job) {
         // Record this before anything else can fail. Everything below — the
         // spool wait, the unlinks, the status write — can be interrupted, and
         // without this marker a restart would treat the job as never printed.
-        await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+        // A database blip here must not throw: the paper is already coming out,
+        // and falling into the catch would mark a printed job 'failed'.
+        try {
+            await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+        } catch (markErr) {
+            console.error(`[JOB ${job.jobId}] Printed, but could not record spool time:`, markErr.message);
+        }
 
         // Small delay to ensure CUPS spooling has completely finished reading the file
         await new Promise(resolve => setTimeout(resolve, 2000));
