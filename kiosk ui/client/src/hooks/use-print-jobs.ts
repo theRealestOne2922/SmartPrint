@@ -4,6 +4,21 @@ import { API_BASE } from "@/lib/api-config";
 // Mongoose returns camelCase fields, so the mapJob() function is simplified.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
+// Job-session tokens, handed out by the server when a PIN lookup succeeds and
+// required to edit or delete that job. Holding them in memory (not
+// localStorage) means they die with the page, which suits a shared kiosk.
+const jobSessions = new Map<string, string>();
+
+function rememberSession(printId: string, res: Response) {
+  const token = res.headers.get("X-Job-Session");
+  if (token) jobSessions.set(printId, token);
+}
+
+function sessionHeader(printId: string): HeadersInit {
+  const token = jobSessions.get(printId);
+  return token ? { "X-Job-Session": token } : {};
+}
+
 // MongoDB/Mongoose already returns camelCase — no snake_case mapping needed
 function mapJob(d: any) {
   return {
@@ -37,6 +52,7 @@ export function usePrintJob(printId: string | null, pollInterval?: number) {
       if (!res.ok) {
         throw new Error("Job not found");
       }
+      rememberSession(printId, res);
 
       const data = await res.json();
       return (Array.isArray(data) ? data : [data]).map(mapJob);
@@ -105,7 +121,7 @@ export function useUpdatePrintJobDetails() {
       // Update via Express API (was: supabase.from('print_jobs').update(...).eq('id', id))
       const res = await fetch(`${API_BASE}/api/jobs/${id}/details`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...sessionHeader(jobId) },
         body: JSON.stringify(updates),
       });
 
@@ -158,6 +174,7 @@ export function useDeletePrintJobItem() {
       // Delete via Express API (was: supabase.from('print_jobs').delete().eq('id', id))
       const res = await fetch(`${API_BASE}/api/jobs/${id}`, {
         method: 'DELETE',
+        headers: sessionHeader(jobId),
       });
 
       if (!res.ok) {

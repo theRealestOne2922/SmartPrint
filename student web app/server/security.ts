@@ -1,6 +1,7 @@
-// Security helpers: release tokens, envelope encryption, password hashing
+// Security helpers: auth tokens, release tokens, envelope encryption, password hashing
 import crypto from "crypto";
 import bcrypt from "bcrypt";
+import type { Request, Response, NextFunction } from "express";
 
 // Release tokens (server-issued proof of a passed faculty check)
 // HMAC-signed, time-boxed, single-purpose per printId. Never derived from
@@ -29,6 +30,74 @@ export function verifyReleaseToken(printId: string, token: unknown): boolean {
   const b = Buffer.from(expected, "hex");
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+// Shared HMAC helper for the token types below.
+function sign(payload: string): string {
+  return crypto.createHmac("sha256", APP_SECRET).update(payload).digest("hex");
+}
+
+function sigMatches(sig: string, expected: string): boolean {
+  // Buffer.from(<non-hex>, "hex") silently truncates, so compare lengths first.
+  const a = Buffer.from(sig, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length === 0 || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Job session tokens — issued when a kiosk successfully looks up a PIN, and
+// required to mutate that job afterwards. This is what stops an anonymous
+// caller from editing or deleting jobs they never had the PIN for.
+const JOB_SESSION_TTL_MS = 30 * 60 * 1000;
+
+export function signJobSession(printId: string): string {
+  const exp = Date.now() + JOB_SESSION_TTL_MS;
+  return `${exp}.${sign(`session.${printId}.${exp}`)}`;
+}
+
+export function verifyJobSession(printId: string, token: unknown): boolean {
+  if (!APP_SECRET || typeof token !== "string") return false;
+  const [expStr, sig] = token.split(".");
+  const exp = Number(expStr);
+  if (!exp || !sig || Date.now() > exp) return false;
+  return sigMatches(sig, sign(`session.${printId}.${exp}`));
+}
+
+// Admin session tokens. The username is carried in the token and covered by
+// the signature; base64url never contains "." so the split stays unambiguous.
+const ADMIN_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+
+export function signAdminToken(username: string): string {
+  const exp = Date.now() + ADMIN_TOKEN_TTL_MS;
+  const u = Buffer.from(username, "utf8").toString("base64url");
+  return `${exp}.${u}.${sign(`admin.${u}.${exp}`)}`;
+}
+
+export function verifyAdminToken(token: unknown): string | null {
+  if (!APP_SECRET || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [expStr, u, sig] = parts;
+  const exp = Number(expStr);
+  if (!exp || Date.now() > exp) return null;
+  if (!sigMatches(sig, sign(`admin.${u}.${exp}`))) return null;
+  return Buffer.from(u, "base64url").toString("utf8");
+}
+
+export interface AuthedRequest extends Request {
+  adminUsername?: string;
+}
+
+// Gate for endpoints that expose or destroy data across all jobs.
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const username = verifyAdminToken(token);
+  if (!username) {
+    return res.status(401).json({ message: "Admin authentication required" });
+  }
+  (req as AuthedRequest).adminUsername = username;
+  next();
 }
 
 // Envelope encryption for confidential documents

@@ -27,7 +27,10 @@ app.use(cors({
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Job-Session"],
+  // The kiosk reads its job-session token off this header; without exposing it
+  // the browser hides it from cross-origin JS.
+  exposedHeaders: ["X-Job-Session"],
 }));
 
 declare module "http" {
@@ -76,7 +79,12 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Never let auth tokens or key material reach the log file.
+        const REDACT = ["token", "wrappedKey", "wrappedKeyIv", "wrappedKeyAuthTag", "encIv", "encAuthTag"];
+        const safe = JSON.stringify(capturedJsonResponse, (key, value) =>
+          REDACT.includes(key) ? "[redacted]" : value,
+        );
+        logLine += ` :: ${safe}`;
       }
 
       log(logLine);

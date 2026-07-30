@@ -26,8 +26,28 @@ export default function AdminDashboard() {
   const [maxFilesLimit, setMaxFilesLimit] = useState("5");
   const [savingSettings, setSavingSettings] = useState(false);
 
+  // Admin endpoints are gated server-side; this header is what actually
+  // authorises the request. The localStorage flag only drives the UI.
+  const authHeaders = (): HeadersInit => {
+    const token = localStorage.getItem("adminToken");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  // A rejected token means the session expired (or was never valid) — send the
+  // admin back to the login screen rather than showing an empty dashboard.
+  const handleAuthFailure = () => {
+    localStorage.removeItem("adminAuth");
+    localStorage.removeItem("adminToken");
+    toast({
+      title: "Session expired",
+      description: "Please sign in again.",
+      variant: "destructive",
+    });
+    setLocation("/admin-login");
+  };
+
   useEffect(() => {
-    if (localStorage.getItem("adminAuth") !== "true") {
+    if (localStorage.getItem("adminAuth") !== "true" || !localStorage.getItem("adminToken")) {
       setLocation("/admin-login");
       return;
     }
@@ -38,7 +58,11 @@ export default function AdminDashboard() {
   const fetchDashboardData = async () => {
     try {
       // Fetch Jobs via Express API (was: supabase.from("print_jobs").select("*"))
-      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`);
+      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`, { headers: authHeaders() });
+      if (jobsRes.status === 401) {
+        handleAuthFailure();
+        return;
+      }
       if (jobsRes.ok) {
         const printJobs = await jobsRes.json();
         if (printJobs) setJobs(printJobs);
@@ -69,7 +93,11 @@ export default function AdminDashboard() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`);
+      const jobsRes = await fetch(`${API_BASE}/api/print-jobs`, { headers: authHeaders() });
+      if (jobsRes.status === 401) {
+        handleAuthFailure();
+        return;
+      }
       if (jobsRes.ok) {
         const printJobs = await jobsRes.json();
         if (printJobs) setJobs(printJobs);
@@ -86,9 +114,9 @@ export default function AdminDashboard() {
     setSavingSettings(true);
     try {
       // Update settings via Express API (was: supabase.from("system_settings").upsert(...))
-      await fetch(`${API_BASE}/api/admin/settings`, {
+      const saveRes = await fetch(`${API_BASE}/api/admin/settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           settings: [
             { key: "jobExpirationHours", value: jobExpirationHours },
@@ -96,9 +124,16 @@ export default function AdminDashboard() {
           ]
         }),
       });
+      if (saveRes.status === 401) {
+        handleAuthFailure();
+        return;
+      }
 
       // Actively trigger cleanup based on new retention settings
-      await fetch(`${API_BASE}/api/admin/cleanup`, { method: "POST" }).catch(console.error);
+      await fetch(`${API_BASE}/api/admin/cleanup`, {
+        method: "POST",
+        headers: authHeaders(),
+      }).catch(console.error);
       
       // Refresh the table so disappeared files are immediately removed from UI
       await fetchDashboardData();
@@ -132,6 +167,7 @@ export default function AdminDashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem("adminAuth");
+    localStorage.removeItem("adminToken");
     setLocation("/admin-login");
   };
 

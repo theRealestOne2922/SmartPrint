@@ -7,11 +7,21 @@ import { z } from "zod";
 import rateLimit from "express-rate-limit";
 import { PrintJob } from "./models/PrintJob";
 import { broadcastJobUpdate } from "./websocket";
-import { signReleaseToken, verifyReleaseToken, sanitizeJob } from "./security";
+import {
+  signReleaseToken,
+  verifyReleaseToken,
+  signJobSession,
+  verifyJobSession,
+  sanitizeJob,
+} from "./security";
 
+// Count failed attempts only: wrong PINs/faculty IDs return 4xx and get
+// throttled, while the kiosk polling a valid PIN every 1.5s returns 2xx and is
+// never penalised.
 const verifyFacultyLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 6,
+  skipSuccessfulRequests: true,
   message: { message: "Too many verification attempts. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -19,7 +29,8 @@ const verifyFacultyLimiter = rateLimit({
 
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: 30,
+  skipSuccessfulRequests: true,
   message: { message: "Too many requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -99,6 +110,7 @@ export async function registerRoutes(
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "No print job found for this code." });
       }
+      res.setHeader("X-Job-Session", signJobSession(String(printId)));
       res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -138,6 +150,15 @@ export async function registerRoutes(
   app.patch("/api/jobs/:id/details", async (req, res) => {
     try {
       const { id } = req.params;
+
+      const owner = await PrintJob.findById(id).select("jobId").lean();
+      if (!owner) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
+        return res.status(403).json({ message: "Enter the print code before editing this job." });
+      }
+
       const updates: any = {};
       if (req.body.pageCount !== undefined) updates.pageCount = req.body.pageCount;
       if (req.body.colorMode !== undefined) updates.colorMode = req.body.colorMode;
@@ -160,6 +181,15 @@ export async function registerRoutes(
   app.delete("/api/jobs/:id", async (req, res) => {
     try {
       const { id } = req.params;
+
+      const owner = await PrintJob.findById(id).select("jobId").lean();
+      if (!owner) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
+        return res.status(403).json({ message: "Enter the print code before deleting this job." });
+      }
+
       const result = await PrintJob.findByIdAndDelete(id);
       if (!result) {
         return res.status(404).json({ message: "Print job not found" });

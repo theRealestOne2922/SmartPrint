@@ -20,6 +20,10 @@ import { AuditLog } from "./models/AuditLog";
 import {
   signReleaseToken,
   verifyReleaseToken,
+  signJobSession,
+  verifyJobSession,
+  signAdminToken,
+  requireAdmin,
   encryptFileEnvelope,
   hashPassword,
   verifyPassword,
@@ -44,10 +48,17 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Faculty ID / PIN lookup are brute-forceable if unthrottled (6-digit PIN = 10^6 space)
+// Faculty ID / PIN lookup are brute-forceable if unthrottled (6-digit PIN = 10^6 space).
+//
+// These count FAILED attempts only (skipSuccessfulRequests). Guessing wrong
+// PINs or faculty IDs produces 4xx and gets throttled fast, while legitimate
+// traffic — the kiosk polling one valid PIN every 1.5s, or a whole campus
+// behind one NAT address — returns 2xx and is never penalised. Counting every
+// request instead would cut the kiosk off mid-print.
 const verifyFacultyLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 6,
+  skipSuccessfulRequests: true,
   message: { message: "Too many verification attempts. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -55,7 +66,8 @@ const verifyFacultyLimiter = rateLimit({
 
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: 30,
+  skipSuccessfulRequests: true,
   message: { message: "Too many requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -208,8 +220,9 @@ export async function registerRoutes(
     }
   });
 
-  // List all print jobs (Admin Dashboard)
-  app.get("/api/print-jobs", async (req, res) => {
+  // List all print jobs (Admin Dashboard). Admin-only: this returns every job
+  // in the system along with its download URL.
+  app.get("/api/print-jobs", requireAdmin, async (req, res) => {
     try {
       const jobs = await PrintJob.find().sort({ createdAt: -1 }).lean();
       res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
@@ -336,8 +349,10 @@ export async function registerRoutes(
     }
   });
 
-  // Get print job(s) by job ID
-  app.get("/api/print-jobs/:jobId", async (req, res) => {
+  // Get print job(s) by job ID. Rate-limited: this takes the same 6-digit PIN
+  // as /api/jobs/lookup, so leaving it open would just be a way around that
+  // endpoint's limiter.
+  app.get("/api/print-jobs/:jobId", lookupLimiter, async (req, res) => {
     try {
       const jobs = await PrintJob.find({ jobId: req.params.jobId }).lean();
       if (!jobs || jobs.length === 0) {
@@ -584,14 +599,18 @@ export async function registerRoutes(
         await Admin.updateOne({ _id: admin._id }, { passwordHash: await hashPassword(password) });
       }
 
-      res.json({ success: true, username: admin.username });
+      res.json({
+        success: true,
+        username: admin.username,
+        token: signAdminToken(admin.username),
+      });
     } catch (err: any) {
       console.error("Admin login error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  app.post("/api/admin/cleanup", async (req, res) => {
+  app.post("/api/admin/cleanup", requireAdmin, async (req, res) => {
     try {
       await cleanupExpiredJobs();
       return res.json({ success: true });
@@ -613,7 +632,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/admin/settings", async (req, res) => {
+  app.put("/api/admin/settings", requireAdmin, async (req, res) => {
     try {
       const { settings } = req.body; // Array of { key, value }
       if (!Array.isArray(settings)) {
@@ -647,6 +666,9 @@ export async function registerRoutes(
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "No print job found for this code." });
       }
+      // Proof that this caller knew the PIN, required to edit/delete below.
+      // Sent as a header so the response body shape stays unchanged.
+      res.setHeader("X-Job-Session", signJobSession(String(printId)));
       res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -695,6 +717,15 @@ export async function registerRoutes(
   app.patch("/api/jobs/:id/details", async (req, res) => {
     try {
       const { id } = req.params;
+
+      const owner = await PrintJob.findById(id).select("jobId").lean();
+      if (!owner) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
+        return res.status(403).json({ message: "Enter the print code before editing this job." });
+      }
+
       const updates: any = {};
       if (req.body.pageCount !== undefined) updates.pageCount = req.body.pageCount;
       if (req.body.colorMode !== undefined) updates.colorMode = req.body.colorMode;
@@ -717,6 +748,15 @@ export async function registerRoutes(
   app.delete("/api/jobs/:id", async (req, res) => {
     try {
       const { id } = req.params;
+
+      const owner = await PrintJob.findById(id).select("jobId").lean();
+      if (!owner) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
+        return res.status(403).json({ message: "Enter the print code before deleting this job." });
+      }
+
       const result = await PrintJob.findByIdAndDelete(id);
       if (!result) {
         return res.status(404).json({ message: "Print job not found" });

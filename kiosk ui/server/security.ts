@@ -26,6 +26,28 @@ export function signReleaseToken(printId: string): string {
   return `${exp}.${sig}`;
 }
 
+// Job session tokens — mirrors the student web app. Issued on a successful PIN
+// lookup and required to edit or delete that job afterwards.
+const JOB_SESSION_TTL_MS = 30 * 60 * 1000;
+
+export function signJobSession(printId: string): string {
+  const exp = Date.now() + JOB_SESSION_TTL_MS;
+  const sig = crypto.createHmac("sha256", APP_SECRET).update(`session.${printId}.${exp}`).digest("hex");
+  return `${exp}.${sig}`;
+}
+
+export function verifyJobSession(printId: string, token: unknown): boolean {
+  if (!APP_SECRET || typeof token !== "string") return false;
+  const [expStr, sig] = token.split(".");
+  const exp = Number(expStr);
+  if (!exp || !sig || Date.now() > exp) return false;
+  const expected = crypto.createHmac("sha256", APP_SECRET).update(`session.${printId}.${exp}`).digest("hex");
+  const a = Buffer.from(sig, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length === 0 || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 const SENSITIVE_JOB_FIELDS = [
   "teacherEmpId",
   "encIv",

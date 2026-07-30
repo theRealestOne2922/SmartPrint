@@ -65,7 +65,9 @@ export default function AdminLogin() {
         return;
       }
 
+      const { token } = await res.json();
       localStorage.setItem("adminAuth", "true");
+      localStorage.setItem("adminToken", token);
       toast({
         title: "Welcome back!",
         description: "Redirecting to admin dashboard…",

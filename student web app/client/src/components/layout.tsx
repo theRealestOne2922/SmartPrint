@@ -93,6 +93,7 @@ export function Layout({ children }: { children: ReactNode }) {
                     onPointerDown={(e) => {
                       e.preventDefault();
                       localStorage.removeItem("adminAuth");
+                      localStorage.removeItem("adminToken");
                       localStorage.removeItem("teacherId");
                       localStorage.removeItem("teacherName");
                       setLoggedInUser(null);
