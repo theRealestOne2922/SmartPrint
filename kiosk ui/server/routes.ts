@@ -232,19 +232,9 @@ export async function registerRoutes(
     }
   });
 
-  // Fetch paid/confirmed jobs (for IdleScreen queue)
-  app.get("/api/jobs/confirmed", async (req, res) => {
-    try {
-      const jobs = await PrintJob.find({ status: 'payment_confirmed' })
-        .sort({ createdAt: -1 })
-        .lean();
-
-      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
-    } catch (err: any) {
-      console.error('Jobs fetch Error:', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
+  // No /api/jobs/confirmed route — see the note in the student web app's
+  // routes.ts. It exposed every confirmed job to anonymous callers and had no
+  // consumer.
 
   return httpServer;
 }

@@ -8,7 +8,6 @@ import fs from "fs/promises";
 import path from "path";
 import rateLimit from "express-rate-limit";
 import express from "express";
-import officeCrypto from "officecrypto-tool";
 import { PrintJob } from "./models/PrintJob";
 import { Admin } from "./models/Admin";
 import { Teacher } from "./models/Teacher";
@@ -167,46 +166,10 @@ export async function registerRoutes(
     }
   });
 
-  // DECRYPT — No database involved, unchanged
-  app.post("/api/decrypt", upload.single("file"), async (req: Request, res: Response) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file provided" });
-      }
-
-      const password = req.body?.password;
-      if (!password) {
-        return res.status(400).json({ message: "No password provided" });
-      }
-
-      const fileBuffer = req.file.buffer;
-
-      // Check if the file is actually encrypted
-      const isEncrypted = officeCrypto.isEncrypted(fileBuffer);
-      if (!isEncrypted) {
-        // File isn't encrypted — return it as-is
-        return res.status(200).send(fileBuffer);
-      }
-
-      // Attempt decryption
-      try {
-        const decryptedBuffer = await officeCrypto.decrypt(fileBuffer, { password });
-        
-        // Set appropriate headers
-        res.setHeader("Content-Type", req.file.mimetype || "application/octet-stream");
-        res.setHeader("Content-Disposition", `attachment; filename="${req.file.originalname}"`);
-        return res.status(200).send(decryptedBuffer);
-      } catch (decryptErr: any) {
-        console.error("Decryption failed:", decryptErr.message);
-        return res.status(401).json({ 
-          message: "Incorrect password. Please try again." 
-        });
-      }
-    } catch (err: any) {
-      console.error("Decrypt endpoint error:", err);
-      return res.status(500).json({ message: "Failed to process the file" });
-    }
-  });
+  // NOTE: there is deliberately no server-side /api/decrypt endpoint.
+  // Password-protected PDFs and Office files are decrypted in the browser
+  // (see decryptPdfClientSide / decryptOfficeClientSide in print-wizard.tsx),
+  // so document passwords never reach the server.
 
   // PRINT JOBS — MongoDB
 
@@ -365,38 +328,8 @@ export async function registerRoutes(
     }
   });
 
-  // PAYMENT — MongoDB
-
-  app.post("/api/jobs/:jobId/demo-pay", async (req, res) => {
-    try {
-      const jobId = req.params.jobId;
-
-      if (!jobId) {
-        return res.status(400).json({ error: 'jobId is required' });
-      }
-
-      const result = await PrintJob.updateMany(
-        { jobId },
-        { status: 'payment_confirmed' }
-      );
-
-      if (result.modifiedCount === 0) {
-        return res.status(404).json({ error: 'Job not found or already confirmed' });
-      }
-
-      // Broadcast status change via WebSocket
-      const updatedJobs = await PrintJob.find({ jobId }).lean();
-      for (const job of updatedJobs) {
-        broadcastJobUpdate({ ...job, id: job._id });
-      }
-
-      console.log(`Demo pay for job ${jobId}`);
-      return res.json({ success: true, message: 'Payment simulated successfully' });
-    } catch (err) {
-      console.error('Demo Pay Error:', err);
-      return res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
+  // No payment routes: staff printing is not billed. The old unauthenticated
+  // /api/jobs/:jobId/demo-pay let any caller push a job to payment_confirmed.
 
   // ADMIN & TEACHER — MongoDB
 
@@ -811,18 +744,9 @@ export async function registerRoutes(
     }
   });
 
-  // Fetch confirmed jobs (kiosk queue display)
-  app.get("/api/jobs/confirmed", async (req, res) => {
-    try {
-      const jobs = await PrintJob.find({ status: 'payment_confirmed' })
-        .sort({ createdAt: -1 })
-        .lean();
-      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
-    } catch (err: any) {
-      console.error('Jobs fetch Error:', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
+  // No /api/jobs/confirmed route: it listed every confirmed job — filename and
+  // download URL included — to anonymous callers, and nothing consumed it.
+  // Anything needing a cross-job view should go through requireAdmin.
 
   return httpServer;
 }
