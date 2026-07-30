@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { PDFDocument, degrees } from 'pdf-lib';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import util from 'util';
 import https from 'https';
 import http from 'http';
@@ -18,6 +18,11 @@ import crypto from 'crypto';
 import { PrintJob } from './models/PrintJob.js';
 
 const execAsync = util.promisify(exec);
+// execFile takes an argv array and spawns without a shell. Anything built from
+// job data (file paths, print options) goes through this, never through
+// execAsync — a filename is attacker-controlled all the way from the upload
+// form, and interpolating it into a shell string is remote code execution.
+const execFileAsync = util.promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load environment variables
@@ -60,24 +65,51 @@ const NEEDS_CONVERSION = new Set([
 ]);
 
 // Download file from URL (follows redirects)
-function downloadFile(url, destPath) {
+const DOWNLOAD_TIMEOUT_MS = 60000;
+const MAX_REDIRECTS = 5;
+
+function downloadFile(url, destPath, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve, reject) => {
         const proto = url.startsWith('https') ? https : http;
         const file = createWriteStream(destPath);
-        proto.get(url, (response) => {
+        let settled = false;
+
+        const fail = (err) => {
+            if (settled) return;
+            settled = true;
+            file.destroy();
+            reject(err);
+        };
+
+        const request = proto.get(url, (response) => {
             if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                file.close();
-                downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
+                if (redirectsLeft <= 0) return fail(new Error('Too many redirects'));
+                response.resume();
+                file.destroy();
+                settled = true;
+                downloadFile(response.headers.location, destPath, redirectsLeft - 1).then(resolve, reject);
                 return;
             }
             if (response.statusCode !== 200) {
-                file.close();
-                reject(new Error(`Download failed: HTTP ${response.statusCode}`));
-                return;
+                response.resume();
+                return fail(new Error(`Download failed: HTTP ${response.statusCode}`));
             }
+            response.on('error', fail);
+            file.on('error', fail);
             response.pipe(file);
-            file.on('finish', () => { file.close(); resolve(); });
-        }).on('error', (err) => { file.close(); reject(err); });
+            file.on('finish', () => {
+                if (settled) return;
+                settled = true;
+                file.close((err) => (err ? reject(err) : resolve()));
+            });
+        });
+
+        // A stalled backend used to wedge the job in "printing" forever while its
+        // entry in activeJobs blocked every retry, including the restart catch-up.
+        request.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+            request.destroy(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s`));
+        });
+        request.on('error', fail);
     });
 }
 
@@ -100,7 +132,13 @@ async function convertToPdf(inputPath) {
     // Use high-fidelity PDF export: lossless images, no form field flattening issues,
     // and EmbedStandardFonts to prevent font substitution mismatches.
     const pdfFilter = 'pdf:writer_pdf_Export:{"MaxImageResolution":{"type":"long","value":"300"},"UseLosslessCompression":{"type":"boolean","value":"true"},"EmbedStandardFonts":{"type":"boolean","value":"true"}}';
-    const cmd = `libreoffice --headless --norestore "-env:UserInstallation=file://${profileDir}" --convert-to "${pdfFilter}" --outdir "${outputDir}" "${inputPath}"`;
+    const args = [
+        '--headless', '--norestore',
+        `-env:UserInstallation=file://${profileDir}`,
+        '--convert-to', pdfFilter,
+        '--outdir', outputDir,
+        inputPath,
+    ];
     console.log(`     CMD: libreoffice --headless --convert-to pdf (high-fidelity) → ${path.basename(inputPath)}`);
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -112,7 +150,7 @@ async function convertToPdf(inputPath) {
                 await new Promise(r => setTimeout(r, 1000));
             }
 
-            const { stdout, stderr } = await execAsync(cmd, { timeout: 120000 });
+            const { stdout, stderr } = await execFileAsync('libreoffice', args, { timeout: 120000 });
             if (stdout) console.log(`     ${stdout.trim()}`);
             if (stderr && !stderr.includes('javaldx')) {
                 console.log(`     stderr: ${stderr.trim()}`);
@@ -141,8 +179,9 @@ async function convertToPdf(inputPath) {
 }
 
 // NO GHOSTSCRIPT! GhostScript duplicates pages on this printer.
-// Files are already decrypted client-side (browser).
 // PDFs go directly to CUPS. No extra processing needed.
+// (Document passwords are stripped in the browser at upload time; the envelope
+// encryption on confidential jobs is undone in processJob above.)
 
 // Lock set — prevents the same job from being processed twice
 const activeJobs = new Set();
@@ -161,7 +200,13 @@ async function processJob(job) {
     console.log(`\n-----------------------------------`);
     console.log(`[JOB ${job.jobId}] Processing: "${job.fileName}"`);
 
-    const ext = path.extname(job.fileName || '').toLowerCase() || '.pdf';
+    // fileName is whatever the uploader's browser sent, so the extension can be
+    // any string at all — path.extname("exam.pdf$(id)") is ".pdf$(id)". It ends
+    // up in a filesystem path and, historically, in a shell command, so pin it
+    // to a plain alphanumeric suffix. Anything else prints as a PDF, which is
+    // what the old code did for unrecognised extensions anyway.
+    const rawExt = path.extname(job.fileName || '').toLowerCase();
+    const ext = /^\.[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : '.pdf';
     const tempFilePath = path.join('/tmp', `smartprint_${job.jobId}_${Date.now()}${ext}`);
     let printPath = tempFilePath;
 
@@ -204,10 +249,12 @@ async function processJob(job) {
         const copies = Math.max(1, parseInt(job.copies) || 1);
         console.log(`[JOB ${job.jobId}] Copies: ${copies}, Color: ${job.colorMode}, Duplex: ${job.duplex}`);
 
-        // Paper size (default A4)
-        const paperSize = (job.paperSize || 'a4').toLowerCase();
-        let lpCommand; // Declared here so it's accessible after the if/else blocks
-        
+        // Paper size (default A4). The schema restricts this to a4/a3, but the
+        // agent reads raw documents, so re-check rather than trust it.
+        const requested = (job.paperSize || 'a4').toLowerCase();
+        const paperSize = requested === 'a3' ? 'a3' : 'a4';
+        let lpArgs; // Declared here so it's accessible after the if/else blocks
+
         // --- BOOKLET FORMATTING FOR A3 ---
         if (paperSize === 'a3') {
             console.log(`[JOB ${job.jobId}] Formatting as A3 Booklet...`);
@@ -275,42 +322,37 @@ async function processJob(job) {
                 }
                 printPath = bookletPath;
                 
-                // Build a clean lp command specifically for booklet printing
-                lpCommand = `lp -d SmartPrint -n ${copies} -o fit-to-page`;
-                if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
-                else lpCommand += ` -o print-color-mode=color`;
+                // Build a clean lp invocation specifically for booklet printing
+                lpArgs = ['-d', 'SmartPrint', '-n', String(copies), '-o', 'fit-to-page'];
+                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
                 // Short-edge duplex for booklet: the spine is along the short edge.
-                lpCommand += ` -o media=a3 -o landscape -o sides=two-sided-short-edge`;
+                lpArgs.push('-o', 'media=a3', '-o', 'landscape', '-o', 'sides=two-sided-short-edge');
                 console.log(`[JOB ${job.jobId}] Booklet generation successful.`);
             } catch (err) {
                 console.error(`[JOB ${job.jobId}] Booklet generation failed:`, err);
                 // Fallback to normal a3
-                lpCommand = `lp -d SmartPrint -n ${copies}`;
-                if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
-                else lpCommand += ` -o print-color-mode=color`;
-                lpCommand += ` -o media=a3`;
-                if (job.orientation === 'landscape') lpCommand += ` -o landscape`;
-                if (job.duplex) lpCommand += ` -o sides=two-sided-long-edge`;
-                else lpCommand += ` -o sides=one-sided`;
+                lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
+                lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
+                lpArgs.push('-o', 'media=a3');
+                if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
+                lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
             }
         } else {
-            lpCommand = `lp -d SmartPrint -n ${copies}`;
-            if (job.colorMode === 'bw') lpCommand += ` -o print-color-mode=monochrome`;
-            else lpCommand += ` -o print-color-mode=color`;
-            if (job.duplex) lpCommand += ` -o sides=two-sided-long-edge`;
-            else lpCommand += ` -o sides=one-sided`;
-            lpCommand += ` -o media=${paperSize}`;
-            if (job.orientation === 'landscape') lpCommand += ` -o landscape`;
+            lpArgs = ['-d', 'SmartPrint', '-n', String(copies)];
+            lpArgs.push('-o', job.colorMode === 'bw' ? 'print-color-mode=monochrome' : 'print-color-mode=color');
+            lpArgs.push('-o', job.duplex ? 'sides=two-sided-long-edge' : 'sides=one-sided');
+            lpArgs.push('-o', `media=${paperSize}`);
+            if (job.orientation === 'landscape') lpArgs.push('-o', 'landscape');
         }
 
         if (job.pageRange && job.pageRange.toLowerCase() !== 'all') {
             const sanitizedRange = job.pageRange.replace(/[^0-9,\-]/g, '');
-            if (sanitizedRange) lpCommand += ` -P ${sanitizedRange}`;
+            if (sanitizedRange) lpArgs.push('-P', sanitizedRange);
         }
-        lpCommand += ` "${printPath}"`;
+        lpArgs.push(printPath);
 
-        console.log(`[JOB ${job.jobId}] Printing: ${lpCommand}`);
-        const { stdout, stderr } = await execAsync(lpCommand);
+        console.log(`[JOB ${job.jobId}] Printing: lp ${lpArgs.join(' ')}`);
+        const { stdout, stderr } = await execFileAsync('lp', lpArgs);
         if (stderr) console.warn(`[PRINTER WARNING]: ${stderr}`);
         console.log(`[JOB ${job.jobId}] Spooled: ${stdout.trim()}`);
 

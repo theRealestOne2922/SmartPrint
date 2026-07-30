@@ -137,6 +137,22 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
 ];
 
+// The upload's original filename is stored on the job and later used by the Pi
+// agent to build a temp path and a print command. Accents and spaces are fine —
+// staff name files in Tamil and Hindi — but path separators, quotes and shell
+// metacharacters have no business in a display name and are dropped here so they
+// can never reach the Pi. Control characters go too.
+function sanitizeFileName(name: string): string {
+  const cleaned = (name || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/[\\/"'`$;|&<>*?]/g, "")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 200);
+  return cleaned || "document";
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -152,8 +168,10 @@ export async function registerRoutes(
         return res.status(400).json({ message: "No file uploaded" });
       }
 
+      const safeName = sanitizeFileName(req.file.originalname);
+
       // Validate file type - only allow printable documents
-      const fileExt = path.extname(req.file.originalname).toLowerCase();
+      const fileExt = path.extname(safeName).toLowerCase();
       const fileMime = req.file.mimetype || '';
       if (!ALLOWED_EXTENSIONS.includes(fileExt) && !ALLOWED_MIME_TYPES.includes(fileMime)) {
         return res.status(400).json({
@@ -161,9 +179,11 @@ export async function registerRoutes(
         });
       }
 
-      // Hash the file for deduplication
+      // Hash the file for deduplication. The extension lands in an on-disk name
+      // and a public URL, so only an allowed one is carried over — the mimetype
+      // branch above can admit a file whose extension is junk.
       const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
-      const ext = path.extname(req.file.originalname) || '';
+      const ext = ALLOWED_EXTENSIONS.includes(fileExt) ? fileExt : '';
       const filename = `${hash}${ext}`;
       const storagePath = path.join(UPLOADS_DIR, filename);
 
@@ -176,13 +196,13 @@ export async function registerRoutes(
       const publicUrl = `${protocol}://${host}/uploads/${filename}`;
 
       let pageCount = 1;
-      if (req.file.mimetype === "application/pdf" || req.file.originalname.toLowerCase().endsWith(".pdf")) {
+      if (req.file.mimetype === "application/pdf" || safeName.toLowerCase().endsWith(".pdf")) {
         pageCount = await getPdfPageCount(req.file.buffer);
       }
 
       res.status(200).json({
         filePath: publicUrl,
-        fileName: req.file.originalname,
+        fileName: safeName,
         pageCount,
       });
     } catch (err: any) {
@@ -309,11 +329,15 @@ export async function registerRoutes(
         }
       }
 
+      // Sanitize again here: this endpoint accepts fileName from the request
+      // body, so a caller can set it to anything without going through /upload.
+      const safeFileName = sanitizeFileName(fileName);
+
       const job = await PrintJob.create({
         jobId,
         studentName: studentName || "Student",
         teacherEmpId: teacherEmpId || null,
-        fileName,
+        fileName: safeFileName,
         filePath: finalFilePath,
         pageCount,
         colorMode,
@@ -332,7 +356,7 @@ export async function registerRoutes(
       // Send Email OTP if teacherEmail is provided
       if (teacherEmail) {
         // Run asynchronously so it doesn't block the response
-        sendOtpEmail(teacherEmail, studentName || "Faculty Member", jobId, fileName).catch(console.error);
+        sendOtpEmail(teacherEmail, studentName || "Faculty Member", jobId, safeFileName).catch(console.error);
       }
 
       res.status(201).json(sanitizeJob(job.toJSON()));
