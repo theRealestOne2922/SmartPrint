@@ -30,9 +30,13 @@ export function RealtimeStatusHandler() {
         try {
           const data = JSON.parse(event.data);
 
-          if (data.type === 'JOB_UPDATE' && data.job) {
-            // Invalidate relevant React Query caches so components re-fetch
-            queryClient.invalidateQueries({ queryKey: ['print-job', data.job.jobId] });
+          if (data.type === 'JOB_UPDATE') {
+            // The broadcast deliberately carries no print code any more — it
+            // used to, which published every code to anyone holding this socket
+            // open. Invalidate the whole 'print-job' key prefix instead: this
+            // screen only ever tracks one job, so refetching it is the same
+            // work, and the refetch goes through the authenticated endpoint.
+            queryClient.invalidateQueries({ queryKey: ['print-job'] });
             queryClient.invalidateQueries({ queryKey: ['confirmed-jobs'] });
           }
         } catch (err) {
