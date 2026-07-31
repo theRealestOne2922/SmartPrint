@@ -274,6 +274,10 @@ export default function PrintWizard() {
   // Booklet preview state
   const [bookletPreviewUrl, setBookletPreviewUrl] = useState<string | null>(null);
   const [isGeneratingBooklet, setIsGeneratingBooklet] = useState(false);
+  // Which tab the preview is on. 'document' is the plain page view people expect;
+  // 'layout' shows how an A3 job is imposed onto the folded sheet. Only offered
+  // for A3, since on A4 the document view already is the printed layout.
+  const [previewMode, setPreviewMode] = useState<'document' | 'layout'>('document');
   const getSettingsFor = (index: number | null) => index !== null && fileSettings[index] ? fileSettings[index] : globalSettings;
 
   // Derive the active paper size for the currently-previewed file so the booklet
@@ -331,6 +335,11 @@ export default function PrintWizard() {
 
   const uploadMutation = useUploadFile();
   const createJobMutation = useCreatePrintJob();
+
+  // Always open a preview on the document, whichever tab was last used.
+  useEffect(() => {
+    setPreviewMode('document');
+  }, [previewFileIndex]);
 
   // Booklet preview generator effect
   useEffect(() => {
@@ -1284,7 +1293,14 @@ export default function PrintWizard() {
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0.9, opacity: 0 }}
                         onClick={(e) => e.stopPropagation()}
-                        className="bg-card rounded-3xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+                        /* A3 sheets are landscape and carry two pages, so give them a wider
+                           dialog — at the portrait width the two halves are too small to
+                           actually check anything on. */
+                        className={`bg-card rounded-3xl shadow-2xl w-full max-h-[80vh] overflow-hidden flex flex-col ${
+                          getSettingsFor(previewFileIndex).paperSize === 'a3' && previewMode === 'layout'
+                            ? 'max-w-4xl'
+                            : 'max-w-2xl'
+                        }`}
                       >
                         <div className="p-5 border-b border-border flex items-center justify-between">
                           <div>
@@ -1292,7 +1308,14 @@ export default function PrintWizard() {
                             <p className="text-xs text-muted-foreground mt-1">
                               {(() => {
                                 const s = getSettingsFor(previewFileIndex);
-                                return `${s.copies} cop${s.copies > 1 ? 'ies' : 'y'} · ${s.colorMode === 'bw' ? 'B&W' : 'Color'} · ${s.duplex ? 'Double-sided' : 'Single-sided'} · ${s.orientation === 'portrait' ? 'Portrait' : 'Landscape'} · ${s.paperSize === 'a3' ? 'A3' : 'A4'} · ${s.pageRangeMode === 'all' ? 'All pages' : s.pageRangeMode === 'custom' ? `Pages: ${s.customRange}` : `${s.pageRangeMode} pages`}`;
+                                // A3 always prints as a folded booklet, which is landscape and
+                                // double-sided regardless of what the orientation and duplex
+                                // controls say — reporting "Portrait · Single-sided" next to a
+                                // landscape booklet preview just looked wrong.
+                                const isBook = s.paperSize === 'a3';
+                                const sides = isBook ? 'Double-sided' : s.duplex ? 'Double-sided' : 'Single-sided';
+                                const layout = isBook ? 'Booklet' : s.orientation === 'portrait' ? 'Portrait' : 'Landscape';
+                                return `${s.copies} cop${s.copies > 1 ? 'ies' : 'y'} · ${s.colorMode === 'bw' ? 'B&W' : 'Color'} · ${sides} · ${layout} · ${s.paperSize === 'a3' ? 'A3' : 'A4'} · ${s.pageRangeMode === 'all' ? 'All pages' : s.pageRangeMode === 'custom' ? `Pages: ${s.customRange}` : `${s.pageRangeMode} pages`}`;
                               })()}
                             </p>
                           </div>
@@ -1303,6 +1326,29 @@ export default function PrintWizard() {
                             <X className="w-5 h-5" />
                           </button>
                         </div>
+                        {/* Document / layout tabs. Only for A3: an A4 job prints exactly
+                            what the document view already shows, so a second tab there
+                            would be the same picture twice. */}
+                        {getSettingsFor(previewFileIndex).paperSize === 'a3' && (
+                          <div className="px-5 pt-4 flex items-center gap-2">
+                            {([
+                              { key: 'document', label: 'Document' },
+                              { key: 'layout', label: 'Print layout' },
+                            ] as const).map((tab) => (
+                              <button
+                                key={tab.key}
+                                onClick={() => setPreviewMode(tab.key)}
+                                className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                                  previewMode === tab.key
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-secondary text-muted-foreground hover:text-foreground'
+                                }`}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         <div className="flex-1 overflow-auto p-5 flex items-center justify-center min-h-[300px]">
                           {(() => {
                             const fd = fileDetailsList[previewFileIndex];
@@ -1312,11 +1358,23 @@ export default function PrintWizard() {
                             const isOffice = ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'odt', 'ods', 'odp'].includes(ext);
                             const settings = getSettingsFor(previewFileIndex);
 
-                            // Paper dimensions for visual frame (aspect ratios)
-                            // If A3 PDF Booklet, the physical paper is ALWAYS Landscape.
-                            const isBooklet = isPdf && settings.paperSize === 'a3';
-                            const isLandscape = isBooklet ? true : settings.orientation === 'landscape';
+                            // Paper dimensions for visual frame (aspect ratios).
+                            // Every A3 job is imposed as a booklet by the print agent —
+                            // Office files and images are converted to PDF first and then
+                            // imposed exactly like a PDF — so the physical sheet is ALWAYS
+                            // landscape A3 carrying two A4 pages per side, whatever was
+                            // uploaded. This used to be gated on isPdf, which left a Word
+                            // document previewing as a portrait page while the printer
+                            // produced a landscape booklet. Portrait A3 and portrait A4
+                            // share the same 1:√2 ratio, so the frame was also visually
+                            // identical to A4 and the size change looked like it did
+                            // nothing at all.
                             const isA3 = settings.paperSize === 'a3';
+                            // The layout view is opt-in via the tabs. The document tab shows the
+                            // file the way people expect to read it; only the layout tab redraws
+                            // it as the folded A3 sheet the printer actually produces.
+                            const isBooklet = isA3 && previewMode === 'layout';
+                            const isLandscape = isBooklet ? true : settings.orientation === 'landscape';
                             // A4 = 210x297mm, A3 = 297x420mm
                             const paperW = isLandscape ? (isA3 ? 420 : 297) : (isA3 ? 297 : 210);
                             const paperH = isLandscape ? (isA3 ? 297 : 210) : (isA3 ? 420 : 297);
@@ -1335,25 +1393,72 @@ export default function PrintWizard() {
                                   }}
                                 >
                                   {content}
+                                  {/* Centre fold — where the sheet is folded to make the booklet */}
+                                  {isBooklet && (
+                                    <div
+                                      className="absolute inset-y-0 left-1/2 z-10 pointer-events-none border-l border-dashed border-gray-300"
+                                      aria-hidden="true"
+                                    />
+                                  )}
                                   {/* Paper size label */}
                                   <div className="absolute bottom-2 right-3 bg-black/5 backdrop-blur-sm text-[10px] font-bold text-muted-foreground px-2 py-0.5 rounded-md uppercase tracking-wider z-10">
-                                    {settings.paperSize.toUpperCase()} · {isLandscape ? 'Landscape' : 'Portrait'}
+                                    {settings.paperSize.toUpperCase()} · {isBooklet ? 'Booklet' : isLandscape ? 'Landscape' : 'Portrait'}
                                   </div>
                                 </div>
+                                {isBooklet && (
+                                  <p className="mt-3 text-xs text-muted-foreground text-center max-w-md">
+                                    Folded booklet — one A3 sheet, two A4 pages per side, printed
+                                    double-sided on the short edge. Page 1 sits on the right of the
+                                    front sheet; the last page faces it on the left.
+                                  </p>
+                                )}
                               </div>
                             );
 
+                            // On a booklet sheet the first page lands on the right half of the
+                            // front side; the left half is the last page. Anything that cannot
+                            // be imposed in the browser is drawn into that slot, so the preview
+                            // matches where the content actually comes out.
+                            //
+                            // Each half of a landscape A3 sheet is exactly A4 portrait, so a
+                            // slot simply fills its half — no padding or aspect ratio, both of
+                            // which only pushed the page over the fold.
+                            const pageSlot = (content: React.ReactNode, label?: string) => (
+                              <div className="relative h-full w-full overflow-hidden bg-white">
+                                {content}
+                                {label && (
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">
+                                      {label}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+
+                            const onSheet = (content: React.ReactNode) =>
+                              isBooklet ? (
+                                <div className="w-full h-full flex">
+                                  <div className="w-1/2 h-full">{pageSlot(null, 'Last page')}</div>
+                                  <div className="w-1/2 h-full">{pageSlot(content)}</div>
+                                </div>
+                              ) : (
+                                content
+                              );
+
                             if (isImg) {
                               return paperFrame(
-                                <img
-                                  src={fd.filePath}
-                                  alt={fd.fileName}
-                                  className={`w-full h-full object-contain p-3 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
-                                />
+                                onSheet(
+                                  <img
+                                    src={fd.filePath}
+                                    alt={fd.fileName}
+                                    className={`w-full h-full object-contain p-3 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
+                                  />
+                                )
                               );
                             }
                             if (isPdf) {
-                              if (isA3) {
+                              if (isBooklet) {
                                 if (isGeneratingBooklet) {
                                   return paperFrame(
                                     <div className="w-full h-full flex flex-col items-center justify-center space-y-4">
@@ -1373,15 +1478,38 @@ export default function PrintWizard() {
                                 }
                               }
                               return paperFrame(
-                                <iframe
-                                  src={`${fd.filePath}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
-                                  className={`w-full h-full border-0 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
-                                  title={`Preview ${fd.fileName}`}
-                                />
+                                onSheet(
+                                  <iframe
+                                    src={`${fd.filePath}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                                    className={`w-full h-full border-0 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
+                                    title={`Preview ${fd.fileName}`}
+                                  />
+                                )
                               );
                             }
                             if (isOffice) {
-                              // Use Google Docs Viewer for Office files
+                              // Google's viewer is a scrolling document viewer, not a page
+                              // renderer: it draws its own toolbar and page counter and stacks
+                              // every page continuously. Dropped into a booklet slot that looks
+                              // like a broken page, and it is a cross-origin frame so none of
+                              // that chrome can be styled away. On a booklet, show the page
+                              // position instead — the layout is the point here, and the
+                              // document itself is readable in the A4 view.
+                              if (isBooklet) {
+                                return paperFrame(
+                                  onSheet(
+                                    <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
+                                      <FileText className="w-10 h-10 text-primary/30" />
+                                      <p className="text-[11px] font-semibold text-foreground/70 line-clamp-2 break-all">
+                                        {fd.fileName}
+                                      </p>
+                                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground/60">
+                                        Page 1
+                                      </p>
+                                    </div>
+                                  )
+                                );
+                              }
                               const viewerUrl = `https://docs.google.com/gview?url=${encodeURIComponent(fd.filePath)}&embedded=true`;
                               return paperFrame(
                                 <iframe
@@ -1393,6 +1521,7 @@ export default function PrintWizard() {
                             }
                             // Fallback: try rendering as image first (covers edge cases), with file info overlay
                             return paperFrame(
+                              onSheet(
                               <div className="w-full h-full flex flex-col items-center justify-center relative">
                                 <img
                                   src={fd.filePath}
@@ -1412,6 +1541,7 @@ export default function PrintWizard() {
                                   <p className="text-xs text-muted-foreground">{fd.pageCount} page{fd.pageCount > 1 ? 's' : ''} · Will be printed as shown</p>
                                 </div>
                               </div>
+                              )
                             );
                           })()}
                         </div>
