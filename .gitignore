@@ -138,6 +138,13 @@ build/
 # Backup archives (may contain .env files — never commit these)
 *.zip
 
+# Uploaded documents — real exam papers and student files pass through here.
+# One of them was committed once already, which on a public repo means it was
+# published. The server recreates this directory on startup, so nothing needs
+# it to be in the repo.
+student web app/uploads/
+uploads/
+
 # Temp module the Pi agent's test harness writes next to index.js
 pi-print-agent/.test-harness-*.mjs
 
