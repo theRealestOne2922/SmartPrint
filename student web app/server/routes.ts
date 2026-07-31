@@ -103,7 +103,6 @@ const statusLimiter = rateLimit({
 
 // Credential endpoints. Failures only, so a user fat-fingering their password
 // isn't locked out by their own successful logins, but guessing is throttled.
-// The seeded admin account ships with a well-known default password.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -155,11 +154,6 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
 ];
 
-// The upload's original filename is stored on the job and later used by the Pi
-// agent to build a temp path and a print command. Accents and spaces are fine —
-// staff name files in Tamil and Hindi — but path separators, quotes and shell
-// metacharacters have no business in a display name and are dropped here so they
-// can never reach the Pi. Control characters go too.
 // MongoDB treats an object value as a query operator, so a JSON body of
 // {"otp": {"$ne": null}} becomes "any OTP that is not null" and matches without
 // knowing the code. Every user-supplied value that reaches a query has to be a
@@ -207,6 +201,11 @@ async function uploadsSizeBytes(force = false): Promise<number> {
 // always fails; the point is the time it takes doing so.
 const DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEe.uHqmR7bH0Kz/9dRUMPtCLfvJKA9wJHu";
 
+// The upload's original filename is stored on the job and later used by the Pi
+// agent to build a temp path and a print command. Accents and spaces are fine —
+// staff name files in Tamil and Hindi — but path separators, quotes and shell
+// metacharacters have no business in a display name and are dropped here so they
+// can never reach the Pi. Control characters go too.
 function sanitizeFileName(name: string): string {
   const cleaned = (name || "")
     // eslint-disable-next-line no-control-regex
@@ -288,7 +287,13 @@ export async function registerRoutes(
       });
     } catch (err: any) {
       console.error("Upload Error:", err);
-      res.status(400).json({ message: err.message || "Upload failed" });
+      // multer's own messages are worth showing ("File too large"). Anything
+      // else is a filesystem or parser error whose text can carry server paths,
+      // so it stays in the log.
+      const safeMessage = err?.code === "LIMIT_FILE_SIZE"
+        ? "That file is larger than the 20MB limit."
+        : "Upload failed. Please try again.";
+      res.status(400).json({ message: safeMessage });
     }
   });
 
@@ -316,7 +321,8 @@ export async function registerRoutes(
       }
       res.status(503).json({ message: "Could not allocate a print code. Please try again." });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
     }
   });
 
@@ -455,7 +461,8 @@ export async function registerRoutes(
         });
       }
       console.error("Create print job error:", err);
-      res.status(500).json({ message: err.message || "Internal server error" });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -471,7 +478,8 @@ export async function registerRoutes(
       const mapped = jobs.map(j => sanitizeJob({ ...j, id: j._id }));
       res.json(mapped.length === 1 ? mapped[0] : mapped);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
     }
   });
 
@@ -796,7 +804,8 @@ export async function registerRoutes(
       res.setHeader("X-Job-Session", signJobSession(String(printId)));
       res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
     }
   });
 
@@ -834,7 +843,8 @@ export async function registerRoutes(
 
       res.json({ success: true, token: signReleaseToken(printId) });
     } catch (err: any) {
-      res.status(500).json({ message: err.message || "Verification failed" });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Verification failed. Please try again." });
     }
   });
 
@@ -875,7 +885,8 @@ export async function registerRoutes(
       }
       res.json(sanitizeJob(job.toJSON()));
     } catch (err: any) {
-      res.status(500).json({ message: err.message || "Failed to update job details" });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Could not update this job. Please try again." });
     }
   });
 
@@ -898,7 +909,8 @@ export async function registerRoutes(
       }
       res.json({ success: true, id });
     } catch (err: any) {
-      res.status(500).json({ message: err.message || "Failed to delete print job" });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Could not delete this job. Please try again." });
     }
   });
 
@@ -906,7 +918,18 @@ export async function registerRoutes(
   app.patch("/api/jobs/:printId/status", statusLimiter, async (req, res) => {
     try {
       const printId = String(req.params.printId);
-      const { status, releaseToken } = req.body;
+      const { releaseToken } = req.body;
+
+      // status went into the database exactly as sent, unvalidated. Anyone
+      // holding a print code could set it to any string at all: a value the
+      // kiosk cannot render, "completed" on a job that never printed, or an
+      // object, which reached Mongoose as a cast error and came back as a 500.
+      // These five are the only states anything in the system understands.
+      const ALLOWED_STATUSES = ["uploaded", "printing", "completed", "failed", "cancelled"];
+      const status = asString(req.body.status);
+      if (!status || !ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({ message: "Unknown status." });
+      }
 
       // Confidential jobs can only move to 'printing' with a valid,
       // server-issued release token (proof the faculty check passed).
@@ -942,7 +965,8 @@ export async function registerRoutes(
 
       res.json(mapped);
     } catch (err: any) {
-      res.status(500).json({ message: err.message || "Failed to update status" });
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Could not update the job status. Please try again." });
     }
   });
 
