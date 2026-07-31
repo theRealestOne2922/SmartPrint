@@ -73,29 +73,30 @@ function askHidden(question) {
 await mongoose.connect(uri);
 
 const admins = await Admin.find().select('username').lean();
-if (admins.length) {
-  console.log(`Existing admin account(s): ${admins.map((a) => a.username).join(', ')}`);
-} else {
+
+// Pick the account without asking wherever the answer is obvious. Asking for a
+// username people have to retype exactly — "vit admin" has a space in it — just
+// created a way to mistype it, get offered a new account, decline, and end up
+// having changed nothing while believing the rotation was done.
+let username;
+if (admins.length === 1) {
+  username = admins[0].username;
+  console.log(`Changing the password for the only admin account: "${username}"`);
+} else if (admins.length === 0) {
   console.log('No admin accounts exist yet — this will create one.');
-}
-
-const typed = (await ask(`Username${admins.length ? ` [${admins[0].username}]` : ''}: `)).trim();
-const username = typed || (admins.length ? admins[0].username : '');
-if (!username) {
-  console.error('A username is required. Nothing was changed.');
-  await mongoose.disconnect();
-  process.exit(1);
-}
-
-// Creating a second admin by mistyping the username would leave the original
-// account — and its old password — working. Make that an explicit choice.
-const isNew = !admins.some((a) => a.username === username);
-if (isNew && admins.length) {
-  const confirmNew = (await ask(`"${username}" does not exist. Create a NEW admin? The existing account keeps its password. [y/N]: `)).trim().toLowerCase();
-  if (confirmNew !== 'y') {
-    console.log('Nothing was changed.');
+  username = (await ask('Username for the new admin: ')).trim();
+  if (!username) {
+    console.error('A username is required. Nothing was changed.');
     await mongoose.disconnect();
-    process.exit(0);
+    process.exit(1);
+  }
+} else {
+  console.log(`Admin accounts: ${admins.map((a) => a.username).join(', ')}`);
+  username = (await ask(`Which one? [${admins[0].username}]: `)).trim() || admins[0].username;
+  if (!admins.some((a) => a.username === username)) {
+    console.error(`"${username}" is not one of those accounts. Nothing was changed.`);
+    await mongoose.disconnect();
+    process.exit(1);
   }
 }
 
