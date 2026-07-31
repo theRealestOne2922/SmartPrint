@@ -642,10 +642,29 @@ export async function registerRoutes(
         return res.status(400).json({ message: "settings must be an array of { key, value }" });
       }
 
+      // Only these two keys mean anything to the app, and both are numbers with
+      // a sane range. Previously any key and any value was upserted, so a typo
+      // of 0 in the retention box set the cleanup cutoff to "now" and deleted
+      // every job on the next sweep — an accident an admin could not undo.
+      const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
+        jobExpirationHours: { min: 1, max: 8760 }, // 1 hour to a year
+        maxFilesLimit: { min: 1, max: 50 },
+      };
+
       for (const setting of settings) {
+        const rule = ALLOWED_SETTINGS[setting?.key];
+        if (!rule) {
+          return res.status(400).json({ message: `Unknown setting "${setting?.key}".` });
+        }
+        const value = Math.floor(Number(setting.value));
+        if (!Number.isFinite(value) || value < rule.min || value > rule.max) {
+          return res.status(400).json({
+            message: `${setting.key} must be a whole number between ${rule.min} and ${rule.max}.`,
+          });
+        }
         await SystemSetting.findOneAndUpdate(
           { key: setting.key },
-          { key: setting.key, value: setting.value },
+          { key: setting.key, value: String(value) },
           { upsert: true, new: true }
         );
       }

@@ -4,12 +4,12 @@ import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import crypto from "crypto";
 import path from "path";
 import { startOrphanCleanupScheduler } from "./cleanup";
 import { connectMongoDB } from "./mongodb";
 import { initWebSocket } from "./websocket";
 import { Admin } from "./models/Admin";
-import { Teacher } from "./models/Teacher";
 import { SystemSetting } from "./models/SystemSetting";
 import { hashPassword } from "./security";
 
@@ -99,25 +99,34 @@ app.use((req, res, next) => {
  */
 async function seedDefaultData() {
   try {
-    // Seed admin if none exists
+    // Seed admin if none exists.
+    //
+    // This used to create "vit admin" / "admin123" — a working password to the
+    // admin dashboard, written in the source of a public repository. Anyone who
+    // opened the repo could sign in and read every print job.
+    //
+    // Credentials now come from the environment, or a random password is
+    // generated and printed once. Nothing usable is committed either way.
     const adminCount = await Admin.countDocuments();
     if (adminCount === 0) {
-      await Admin.create({ username: 'vit admin', passwordHash: await hashPassword('admin123') });
-      console.log('[seed] ✅ Created default admin user (vit admin / admin123)');
+      const username = process.env.ADMIN_USERNAME?.trim();
+      const password = process.env.ADMIN_PASSWORD;
+
+      if (username && password) {
+        await Admin.create({ username, passwordHash: await hashPassword(password) });
+        console.log(`[seed] ✅ Created admin "${username}" from ADMIN_USERNAME/ADMIN_PASSWORD.`);
+      } else {
+        const generated = crypto.randomBytes(18).toString('base64url');
+        await Admin.create({ username: 'admin', passwordHash: await hashPassword(generated) });
+        console.log('[seed] ⚠️  No admin existed. Created "admin" with a random password:');
+        console.log(`[seed]     ${generated}`);
+        console.log('[seed]     Sign in and change it — this is the only time it is shown,');
+        console.log('[seed]     and it is sitting in the server log until you rotate the log.');
+      }
     }
 
-    // Seed teacher if none exists
-    const teacherCount = await Teacher.countDocuments();
-    if (teacherCount === 0) {
-      await Teacher.create({
-        empId: '1001',
-        name: 'Teacher Name',
-        email: 'realme11421@gmail.com',
-        password: await hashPassword('password123'),
-        department: 'CS',
-      });
-      console.log('[seed] ✅ Created default teacher');
-    }
+    // No default teacher. Seeding one meant a real, loginable account with a
+    // password committed to the repo. Staff register themselves.
 
     // Seed settings if none exist
     const settingCount = await SystemSetting.countDocuments();
