@@ -23,8 +23,10 @@ SmartPrint is a **college print management system** built for VIT. Students uplo
 ### Oracle Cloud VM Access
 - **IP:** `140.245.224.137`
 - **OS:** Ubuntu
-- **SSH Key:** `C:\Users\Kishore\Downloads\ssh-key-2026-06-21.key`
+- **SSH Key:** `~/.ssh/smartprint-oracle-2026-07-31` (ed25519)
 - **SSH Command:** `ssh -i <path-to-key> ubuntu@140.245.224.137`
+- **Superseded:** the old RSA key `ssh-key-2026-06-21.key` was rotated out on
+  2026-07-31 after being exposed. Delete any copy you still hold.
 - **Backend Location on VM:** `~/smartprintvit/student web app/`
 - **Process Manager:** PM2 (process name: `smartprint`)
 - **Reverse Proxy:** Nginx → proxies port 443 to localhost:5000
@@ -173,7 +175,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\deploy-vit.ps1
 
 ### Deploy Backend to Oracle VM
 ```bash
-ssh -i C:\Users\Kishore\Downloads\ssh-key-2026-06-21.key ubuntu@140.245.224.137
+ssh -i ~/.ssh/smartprint-oracle-2026-07-31 ubuntu@140.245.224.137
 cd ~/smartprintvit/'student web app'
 git pull origin main
 npm install
@@ -213,7 +215,7 @@ pm2 restart smartprint-agent
 
 9. **GitHub Repo:** `https://github.com/theRealestOne2922/SmartPrint` (branch: `main`).
 
-10. **SSH Key Location:** `C:\Users\Kishore\Downloads\ssh-key-2026-06-21.key` — this file is NOT in the git repo. You MUST copy it to the new device manually.
+10. **SSH Key Location:** `~/.ssh/smartprint-oracle-2026-07-31` — this file is NOT in the git repo, and must never be. Copy it to a new device by hand, over a channel you trust. Never paste a private key into a chat, an issue, or a commit; that is what forced the 2026-07-31 rotation.
 
 ---
 
