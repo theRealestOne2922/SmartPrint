@@ -157,12 +157,20 @@ export interface EncryptedEnvelope {
 export function encryptFileEnvelope(buffer: Buffer): EncryptedEnvelope {
   if (!MASTER_KEY) throw new Error("MASTER_KEY not configured");
 
+  // Step 1: lock the document with a fresh random key used for this file only.
+  // Two staff uploading the same paper get different ciphertext, and cracking
+  // one file tells you nothing about any other.
   const dek = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", dek, iv);
   const ciphertext = Buffer.concat([cipher.update(buffer), cipher.final()]);
+  // GCM's auth tag: if a single byte of the file is altered on disk, decryption
+  // fails instead of printing corrupted output.
   const authTag = cipher.getAuthTag();
 
+  // Step 2: lock that key with the MASTER_KEY, which only the server and the Pi
+  // hold. The job document stores the wrapped key, so the database on its own
+  // is useless to anyone who copies it.
   const wrapIv = crypto.randomBytes(12);
   const wrapCipher = crypto.createCipheriv("aes-256-gcm", MASTER_KEY, wrapIv);
   const wrappedKey = Buffer.concat([wrapCipher.update(dek), wrapCipher.final()]);
@@ -200,7 +208,11 @@ export async function verifyPassword(
   return { ok, needsUpgrade: ok };
 }
 
-// Response sanitization — never let job-secret fields reach any client
+// Response sanitization — never let job-secret fields reach any client.
+// This is the fix for what SDC found: open DevTools after signing in and the
+// job payloads carried these fields. Everything that leaves the server for a
+// client goes through here, including the WebSocket broadcast, so a new
+// endpoint can't quietly start leaking them again.
 const SENSITIVE_JOB_FIELDS = [
   "teacherEmpId",
   "encIv",
