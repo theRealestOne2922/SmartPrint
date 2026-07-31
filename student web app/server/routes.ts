@@ -143,6 +143,20 @@ const ALLOWED_MIME_TYPES = [
 // staff name files in Tamil and Hindi — but path separators, quotes and shell
 // metacharacters have no business in a display name and are dropped here so they
 // can never reach the Pi. Control characters go too.
+// MongoDB treats an object value as a query operator, so a JSON body of
+// {"otp": {"$ne": null}} becomes "any OTP that is not null" and matches without
+// knowing the code. Every user-supplied value that reaches a query has to be a
+// plain string; anything else is rejected rather than coerced, because a caller
+// sending an object here is not making a typo.
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+// A real bcrypt hash of a value nobody knows, compared against when no account
+// matches, so a failed login costs the same either way. bcrypt.compare on this
+// always fails; the point is the time it takes doing so.
+const DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEe.uHqmR7bH0Kz/9dRUMPtCLfvJKA9wJHu";
+
 function sanitizeFileName(name: string): string {
   const cleaned = (name || "")
     // eslint-disable-next-line no-control-regex
@@ -400,11 +414,21 @@ export async function registerRoutes(
 
   // ADMIN & TEACHER — MongoDB
 
-  app.post("/api/teacher/register", async (req, res) => {
+  // Registration was open and unthrottled — anyone could create staff accounts
+  // in bulk. It still needs to be self-service, so it is rate limited rather
+  // than gated. Note that a self-registered account gives no access to anyone
+  // else's jobs: confidential release checks the faculty ID on the job itself.
+  app.post("/api/teacher/register", authLimiter, async (req, res) => {
     try {
-      const { name, email, password, empId } = req.body;
+      const name = asString(req.body.name);
+      const email = asString(req.body.email);
+      const password = asString(req.body.password);
+      const empId = asString(req.body.empId);
       if (!name || !email || !password || !empId) {
         return res.status(400).json({ message: "Name, email, password, and empId are required" });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters." });
       }
 
       // Check if email or empId already exists
@@ -430,13 +454,18 @@ export async function registerRoutes(
 
   app.post("/api/teacher/login", authLimiter, async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const email = asString(req.body.email);
+      const password = asString(req.body.password);
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
       }
 
       const teacher = await Teacher.findOne({ email });
       if (!teacher) {
+        // Spend the same time a real comparison costs. Returning immediately
+        // made "no such account" measurably faster than "wrong password", which
+        // turns the 401 into an account-enumeration oracle.
+        await verifyPassword(password, DUMMY_PASSWORD_HASH);
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
@@ -490,7 +519,7 @@ export async function registerRoutes(
 
   app.post("/api/teacher/forgot-password", authLimiter, async (req, res) => {
     try {
-      const { email } = req.body;
+      const email = asString(req.body.email);
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
       }
@@ -528,12 +557,13 @@ export async function registerRoutes(
 
   app.post("/api/teacher/verify-reset-otp", authLimiter, async (req, res) => {
     try {
-      const { email, otp } = req.body;
+      const email = asString(req.body.email);
+      const otp = asString(req.body.otp);
       if (!email || !otp) {
         return res.status(400).json({ message: "Email and OTP are required" });
       }
 
-      const teacher = await Teacher.findOne({ 
+      const teacher = await Teacher.findOne({
         email,
         resetPasswordOtp: otp,
         resetPasswordExpires: { $gt: new Date() } // Ensure it hasn't expired
@@ -552,12 +582,14 @@ export async function registerRoutes(
 
   app.post("/api/teacher/reset-password", authLimiter, async (req, res) => {
     try {
-      const { email, otp, newPassword } = req.body;
+      const email = asString(req.body.email);
+      const otp = asString(req.body.otp);
+      const newPassword = asString(req.body.newPassword);
       if (!email || !otp || !newPassword) {
         return res.status(400).json({ message: "Email, OTP, and new password are required" });
       }
 
-      const teacher = await Teacher.findOne({ 
+      const teacher = await Teacher.findOne({
         email,
         resetPasswordOtp: otp,
         resetPasswordExpires: { $gt: new Date() }
@@ -587,13 +619,15 @@ export async function registerRoutes(
   // through the login budget for everyone else.
   app.post("/api/admin/login", restrictAdminIp, authLimiter, async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const username = asString(req.body.username)?.trim();
+      const password = asString(req.body.password);
       if (!username || !password) {
         return res.status(400).json({ message: "Username and password are required" });
       }
 
-      const admin = await Admin.findOne({ username: username.trim() });
+      const admin = await Admin.findOne({ username });
       if (!admin) {
+        await verifyPassword(password, DUMMY_PASSWORD_HASH);
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
