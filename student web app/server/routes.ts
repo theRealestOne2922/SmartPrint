@@ -42,11 +42,28 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
 
-// Rate limiting: 5 uploads per hour per IP
+// Uploads were capped at 500 an hour "for testing", with a comment claiming 5.
+// At 20MB a file that is 10GB an hour from a single address.
+//
+// The cap cannot simply be dropped to something small: campus wifi puts every
+// member of staff behind one public address, so a tight per-IP limit throttles
+// a department because one person is busy. 200 an hour is loose enough for a
+// real exam-week rush and still bounds one address to a few GB, and the storage
+// ceiling below is what actually protects the disk.
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 500, // Increased for testing
-  message: { message: "Rate limit exceeded: 500 uploads per hour" },
+  max: 200,
+  message: { message: "Too many uploads from this network. Wait a few minutes and try again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Creating a job had no limit at all — a script could add rows for as long as it
+// liked. Generous, because a batch upload legitimately creates one job per file.
+const jobCreateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  message: { message: "Too many print jobs from this network. Wait a few minutes and try again." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -152,6 +169,39 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// Rate limits alone cannot protect the disk: they are per address, and a campus
+// shares addresses, so any limit loose enough for real staff is loose enough to
+// accumulate gigabytes. This is the ceiling that does not care who is uploading
+// or how they are spread out — once the uploads directory reaches it, no new
+// file is accepted until the cleanup sweep reclaims space.
+//
+// The VM has 43GB free, so 5GB is a small fraction of the disk while being far
+// more than the system ever legitimately holds: files live for 24 hours and the
+// whole directory currently sits at single-digit megabytes.
+const MAX_UPLOAD_STORAGE_BYTES = Number(
+  process.env.MAX_UPLOAD_STORAGE_BYTES || 5 * 1024 * 1024 * 1024
+);
+
+let cachedUploadBytes = 0;
+let uploadBytesCachedAt = 0;
+
+// Recomputed at most every 30s. Under a flood, stat-ing every file on every
+// request would itself become the denial of service.
+async function uploadsSizeBytes(force = false): Promise<number> {
+  if (!force && Date.now() - uploadBytesCachedAt < 30_000) return cachedUploadBytes;
+  let total = 0;
+  try {
+    for (const name of await fs.readdir(UPLOADS_DIR)) {
+      try {
+        total += (await fs.stat(path.join(UPLOADS_DIR, name))).size;
+      } catch { /* vanished mid-scan; the sweep got it */ }
+    }
+  } catch { /* directory not created yet */ }
+  cachedUploadBytes = total;
+  uploadBytesCachedAt = Date.now();
+  return total;
+}
+
 // A real bcrypt hash of a value nobody knows, compared against when no account
 // matches, so a failed login costs the same either way. bcrypt.compare on this
 // always fails; the point is the time it takes doing so.
@@ -194,6 +244,19 @@ export async function registerRoutes(
         });
       }
 
+      // Refuse to start filling the disk. Try reclaiming first: most of what
+      // accumulates during a flood is orphans — files uploaded without a job
+      // ever being created — and the sweep clears those.
+      if ((await uploadsSizeBytes()) + req.file.size > MAX_UPLOAD_STORAGE_BYTES) {
+        console.warn("[upload] Storage ceiling reached — running cleanup early.");
+        await cleanupExpiredJobs();
+        if ((await uploadsSizeBytes(true)) + req.file.size > MAX_UPLOAD_STORAGE_BYTES) {
+          return res.status(507).json({
+            message: "Storage is temporarily full. Please try again in a few minutes.",
+          });
+        }
+      }
+
       // Hash the file for deduplication. The extension lands in an on-disk name
       // and a public URL, so only an allowed one is carried over — the mimetype
       // branch above can admit a file whose extension is junk.
@@ -204,6 +267,9 @@ export async function registerRoutes(
 
       // Save to local filesystem
       await fs.writeFile(storagePath, req.file.buffer);
+      // Keep the cached total roughly right between recomputes, so a burst
+      // inside one 30s window still counts towards the ceiling.
+      cachedUploadBytes += req.file.size;
 
       // Construct the public URL for the uploaded file
       const protocol = req.headers['x-forwarded-proto'] || req.protocol;
@@ -267,7 +333,7 @@ export async function registerRoutes(
   });
 
   // Create print job
-  app.post("/api/print-jobs", async (req, res) => {
+  app.post("/api/print-jobs", jobCreateLimiter, async (req, res) => {
     try {
       const {
         jobId: providedJobId,
