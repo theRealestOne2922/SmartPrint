@@ -23,6 +23,7 @@ import {
   verifyJobSession,
   signAdminToken,
   requireAdmin,
+  restrictAdminIp,
   signTeacherToken,
   requireTeacher,
   type AuthedRequest,
@@ -582,7 +583,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/login", authLimiter, async (req, res) => {
+  // restrictAdminIp goes ahead of the limiter so a blocked network cannot burn
+  // through the login budget for everyone else.
+  app.post("/api/admin/login", restrictAdminIp, authLimiter, async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {

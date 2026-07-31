@@ -14,6 +14,14 @@ import { SystemSetting } from "./models/SystemSetting";
 import { hashPassword } from "./security";
 
 const app = express();
+
+// Nginx terminates TLS and proxies to this process, so without this every
+// request appears to come from 127.0.0.1. That quietly broke every rate limit —
+// they all shared a single bucket, so one attacker's failed attempts locked out
+// real staff, while the per-attacker throttling we thought we had did not exist.
+// Any IP-based rule is meaningless until this is set. One hop: nginx.
+// Nginx already sends X-Forwarded-For (checked in sites-enabled/smartprint).
+app.set("trust proxy", 1);
 const httpServer = createServer(app);
 
 // CORS — allow Firebase Hosting frontend to talk to this Oracle VM backend

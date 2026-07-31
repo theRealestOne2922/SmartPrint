@@ -123,8 +123,56 @@ export function requireTeacher(req: Request, res: Response, next: NextFunction) 
   next();
 }
 
+// Optional network restriction for the admin surface, from the pentest note
+// "admin control page - ip based access". Set ADMIN_IP_ALLOWLIST to a comma
+// separated list of addresses or CIDR-less prefixes, e.g.
+//   ADMIN_IP_ALLOWLIST=10.0.0.5,192.168.1.,203.0.113.7
+// A trailing dot acts as a prefix match, which is enough for "the campus range"
+// without pulling in a CIDR library.
+//
+// Left unset, this allows everything and says so at boot. That is deliberate:
+// an allowlist that silently locks the admin out of their own dashboard during
+// an exam is worse than the risk it removes. Turn it on once you know the
+// address you will administer from.
+//
+// This only means anything because trust proxy is set in index.ts; without it
+// every request appears to come from nginx on 127.0.0.1.
+const ADMIN_IP_ALLOWLIST = (process.env.ADMIN_IP_ALLOWLIST || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+if (ADMIN_IP_ALLOWLIST.length === 0) {
+  console.warn("[security] ADMIN_IP_ALLOWLIST is not set — the admin page is reachable from any address.");
+}
+
+function normalizeIp(ip: string): string {
+  // ::ffff:10.0.0.5 is how an IPv4 client shows up on a dual-stack socket.
+  return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+}
+
+export function adminIpAllowed(req: Request): boolean {
+  if (ADMIN_IP_ALLOWLIST.length === 0) return true;
+  const ip = normalizeIp(String(req.ip || ""));
+  return ADMIN_IP_ALLOWLIST.some((entry) =>
+    entry.endsWith(".") ? ip.startsWith(entry) : ip === entry
+  );
+}
+
+export function restrictAdminIp(req: Request, res: Response, next: NextFunction) {
+  if (!adminIpAllowed(req)) {
+    console.warn(`[security] Admin access refused for ${normalizeIp(String(req.ip || ""))}`);
+    return res.status(403).json({ message: "Not available from this network." });
+  }
+  next();
+}
+
 // Gate for endpoints that expose or destroy data across all jobs.
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  // Network check first: a blocked address should not even get to try a password.
+  if (!adminIpAllowed(req)) {
+    return res.status(403).json({ message: "Not available from this network." });
+  }
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const username = verifyAdminToken(token);
@@ -214,6 +262,13 @@ export async function verifyPassword(
 // client goes through here, including the WebSocket broadcast, so a new
 // endpoint can't quietly start leaking them again.
 const SENSITIVE_JOB_FIELDS = [
+  // The direct download URL for the document. Pentest finding: "file can be
+  // accessed unauthorised" — anyone who guessed a print code got this back from
+  // the open lookup endpoint and could fetch the file straight off /uploads.
+  // Nothing on any client needs it: the uploader already has the URL from the
+  // upload response, the kiosk never reads it, and the Pi takes it from the
+  // database rather than the API.
+  "filePath",
   "teacherEmpId",
   "encIv",
   "encAuthTag",
