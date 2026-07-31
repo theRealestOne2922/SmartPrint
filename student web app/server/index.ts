@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -22,6 +23,31 @@ const app = express();
 // Any IP-based rule is meaningless until this is set. One hop: nginx.
 // Nginx already sends X-Forwarded-For (checked in sites-enabled/smartprint).
 app.set("trust proxy", 1);
+
+// The server sent no security headers at all, and advertised itself with
+// "X-Powered-By: Express". Two of these matter concretely here:
+//   frameguard  — the admin dashboard could be framed by another site and
+//                 clicked through invisibly
+//   noSniff     — an uploaded file served from /uploads could be interpreted as
+//                 something other than its declared type by an older browser
+//
+// contentSecurityPolicy and crossOriginEmbedderPolicy are off deliberately.
+// This process also serves the built frontend and the kiosk, and a default CSP
+// blocks their inline styles and the PDF preview. A real CSP is worth doing,
+// but it needs testing against every page rather than being switched on blind.
+//
+// crossOriginResourcePolicy is cross-origin because the frontend on
+// smartprintvit.web.app fetches uploaded documents from this host to preview
+// them; same-origin would break the print wizard.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    hsts: { maxAge: 15552000, includeSubDomains: true },
+    referrerPolicy: { policy: "no-referrer" },
+  })
+);
 const httpServer = createServer(app);
 
 // CORS — allow Firebase Hosting frontend to talk to this Oracle VM backend
@@ -29,9 +55,12 @@ app.use(cors({
   origin: [
     "https://smartprintvit.web.app",
     "https://smartprintvit.firebaseapp.com",
-    "http://localhost:5173",      // Vite dev server
-    "http://localhost:5000",      // local Express
     "http://140.245.224.137",    // Oracle VM direct access
+    // Dev origins only outside production. Leaving localhost permitted on the
+    // live API let any page running on a developer's machine call it directly.
+    ...(process.env.NODE_ENV === "production"
+      ? []
+      : ["http://localhost:5173", "http://localhost:5000"]),
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
