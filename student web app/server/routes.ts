@@ -119,6 +119,40 @@ const lookupLimiter = rateLimit({
 // printing of a non-confidential job, against per-address limits and a 24 hour
 // retention window that keeps the target set small.
 
+// Knowing a print code is enough to look a job up, and that is by design — it
+// is what someone standing at the kiosk types. But it also means a code read
+// over a colleague's shoulder, or off a screen while they collect their pages,
+// was enough to change or destroy their job from anywhere: set a question paper
+// to 500 copies, switch it to colour, or delete it outright.
+//
+// For a confidential job the code is not sufficient. Changing or deleting one
+// requires the same proof as printing it: a release token, which is only issued
+// after the faculty ID is verified. The kiosk already demands that on load for
+// confidential jobs, so it holds the token before any of these controls are
+// reachable — it simply was not sending it.
+async function confidentialGuardFailed(
+  jobId: string,
+  req: Request,
+  res: Response
+): Promise<boolean> {
+  const isConfidential = await PrintJob.exists({ jobId, confidential: true });
+  if (!isConfidential) return false;
+
+  const token = req.headers["x-release-token"];
+  if (!verifyReleaseToken(jobId, token)) {
+    await AuditLog.create({
+      event: "confidential_tamper",
+      printId: jobId,
+      ip: req.ip,
+      success: false,
+      detail: `${req.method} ${req.path} without a release token`,
+    }).catch(() => {});
+    res.status(403).json({ message: "Verify the Faculty ID before changing this job." });
+    return true;
+  }
+  return false;
+}
+
 // Bounds guessing against a single job regardless of how many addresses are
 // used. See the comment at the verification route.
 const FACULTY_ATTEMPT_LIMIT = 10;
@@ -981,6 +1015,7 @@ export async function registerRoutes(
       if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
         return res.status(403).json({ message: "Enter the print code before editing this job." });
       }
+      if (await confidentialGuardFailed(owner.jobId, req, res)) return;
 
       const updates: any = {};
       if (req.body.pageCount !== undefined) updates.pageCount = req.body.pageCount;
@@ -1026,6 +1061,7 @@ export async function registerRoutes(
       if (!verifyJobSession(owner.jobId, req.headers["x-job-session"])) {
         return res.status(403).json({ message: "Enter the print code before deleting this job." });
       }
+      if (await confidentialGuardFailed(owner.jobId, req, res)) return;
 
       const result = await PrintJob.findByIdAndDelete(id);
       if (!result) {

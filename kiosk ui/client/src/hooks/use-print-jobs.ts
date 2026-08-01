@@ -14,6 +14,14 @@ function rememberSession(printId: string, res: Response) {
   if (token) jobSessions.set(printId, token);
 }
 
+// A confidential job needs proof the faculty ID was verified, not just the
+// print code — otherwise a code glimpsed over someone's shoulder is enough to
+// re-configure or delete their exam paper from anywhere. The screen already
+// holds this token: it verifies on load before any control is reachable.
+function releaseHeader(token?: string | null): HeadersInit {
+  return token ? { "X-Release-Token": token } : {};
+}
+
 function sessionHeader(printId: string): HeadersInit {
   const token = jobSessions.get(printId);
   return token ? { "X-Job-Session": token } : {};
@@ -117,11 +125,11 @@ export function useUpdatePrintJobDetails() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, jobId, updates }: { id: string; jobId: string; updates: { pageCount?: number; colorMode?: 'bw' | 'color'; copies?: number; duplex?: boolean; orientation?: 'portrait' | 'landscape'; paperSize?: 'a4' | 'a3' } }) => {
+    mutationFn: async ({ id, jobId, updates, releaseToken }: { id: string; jobId: string; updates: { pageCount?: number; colorMode?: 'bw' | 'color'; copies?: number; duplex?: boolean; orientation?: 'portrait' | 'landscape'; paperSize?: 'a4' | 'a3' }; releaseToken?: string | null }) => {
       // Update via Express API (was: supabase.from('print_jobs').update(...).eq('id', id))
       const res = await fetch(`${API_BASE}/api/jobs/${id}/details`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...sessionHeader(jobId) },
+        headers: { 'Content-Type': 'application/json', ...sessionHeader(jobId), ...releaseHeader(releaseToken) },
         body: JSON.stringify(updates),
       });
 
@@ -170,11 +178,11 @@ export function useDeletePrintJobItem() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, jobId }: { id: string; jobId: string }) => {
+    mutationFn: async ({ id, jobId, releaseToken }: { id: string; jobId: string; releaseToken?: string | null }) => {
       // Delete via Express API (was: supabase.from('print_jobs').delete().eq('id', id))
       const res = await fetch(`${API_BASE}/api/jobs/${id}`, {
         method: 'DELETE',
-        headers: sessionHeader(jobId),
+        headers: { ...sessionHeader(jobId), ...releaseHeader(releaseToken) },
       });
 
       if (!res.ok) {

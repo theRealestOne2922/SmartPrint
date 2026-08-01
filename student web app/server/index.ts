@@ -64,7 +64,7 @@ app.use(cors({
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Job-Session"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Job-Session", "X-Release-Token"],
   // The kiosk reads its job-session token off this header; without exposing it
   // the browser hides it from cross-origin JS.
   exposedHeaders: ["X-Job-Session"],

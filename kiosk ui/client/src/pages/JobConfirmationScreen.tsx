@@ -174,7 +174,7 @@ export function JobConfirmationScreen() {
                   <button
                     onClick={() => {
                       if (confirm("Are you sure you want to remove this document from the print job?")) {
-                        deleteItemMutation.mutate({ id: job.id, jobId: printId }, {
+                        deleteItemMutation.mutate({ id: job.id, jobId: printId, releaseToken }, {
                           onSuccess: () => {
                             if (jobs.length <= 1) {
                               setLocation("/");
@@ -195,13 +195,13 @@ export function JobConfirmationScreen() {
                     <span className="text-sm text-gray-500 font-semibold">Format</span>
                     <div className="flex bg-gray-200 p-1 rounded-xl">
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { colorMode: 'bw' } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { colorMode: 'bw' }, releaseToken })}
                         className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${job.colorMode === 'bw' ? 'bg-primary text-black shadow-sm' : 'text-gray-500'}`}
                       >
                         B&W
                       </button>
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { colorMode: 'color' } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { colorMode: 'color' }, releaseToken })}
                         className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${job.colorMode === 'color' ? 'bg-primary text-black shadow-sm' : 'text-gray-500'}`}
                       >
                         Color
@@ -214,14 +214,14 @@ export function JobConfirmationScreen() {
                     <span className="text-sm text-gray-500 font-semibold">Copies</span>
                     <div className="flex items-center gap-1.5 bg-gray-200 p-1 rounded-xl justify-between">
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { copies: Math.max(1, job.copies - 1) } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { copies: Math.max(1, job.copies - 1) }, releaseToken })}
                         className="w-9 h-9 flex items-center justify-center rounded-lg bg-white shadow-sm active:scale-90"
                       >
                         <Minus className="w-4 h-4 text-gray-700" />
                       </button>
                       <span className="font-bold text-base text-center flex-1">{job.copies}</span>
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { copies: job.copies + 1 } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { copies: job.copies + 1 }, releaseToken })}
                         className="w-9 h-9 flex items-center justify-center rounded-lg bg-white shadow-sm active:scale-90"
                       >
                         <Plus className="w-4 h-4 text-gray-700" />
@@ -234,13 +234,13 @@ export function JobConfirmationScreen() {
                     <span className="text-sm text-gray-500 font-semibold">Paper Size</span>
                     <div className="flex bg-gray-200 p-1 rounded-xl">
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { paperSize: 'a4' } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { paperSize: 'a4' }, releaseToken })}
                         className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${(job.paperSize || 'a3') === 'a4' ? 'bg-primary text-black shadow-sm' : 'text-gray-500'}`}
                       >
                         A4
                       </button>
                       <button
-                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { paperSize: 'a3' } })}
+                        onClick={() => updateDetailsMutation.mutate({ id: job.id, jobId: printId, updates: { paperSize: 'a3' }, releaseToken })}
                         className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${(job.paperSize || 'a3') === 'a3' ? 'bg-primary text-black shadow-sm' : 'text-gray-500'}`}
                       >
                         A3
