@@ -152,3 +152,7 @@ pi-print-agent/.test-harness-*.mjs
 # Committing it would put a 1.4MB machine-written JSON in everyone's diffs and
 # conflict on almost every merge.
 graphify-out/
+
+# Firebase deploy cache — a filename/mtime/hash manifest the CLI rewrites on
+# every deploy. Tracking it means a conflict whenever two people deploy.
+**/.firebase/
