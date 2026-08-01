@@ -24,12 +24,9 @@ export function verifyReleaseToken(printId: string, token: unknown): boolean {
   const [expStr, sig] = token.split(".");
   const exp = Number(expStr);
   if (!exp || !sig || Date.now() > exp) return false;
-  const payload = `${printId}.${exp}`;
-  const expected = crypto.createHmac("sha256", APP_SECRET).update(payload).digest("hex");
-  const a = Buffer.from(sig, "hex");
-  const b = Buffer.from(expected, "hex");
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  // Goes through the same comparison as every other token type rather than
+  // repeating it — this copy predated sigMatches and kept the loose parse.
+  return sigMatches(sig, sign(`${printId}.${exp}`));
 }
 
 // Shared HMAC helper for the token types below.
@@ -37,12 +34,17 @@ function sign(payload: string): string {
   return crypto.createHmac("sha256", APP_SECRET).update(payload).digest("hex");
 }
 
+// An HMAC-SHA256 digest in hex: exactly 64 characters of [0-9a-f].
+const HEX_SIG = /^[0-9a-f]{64}$/;
+
 function sigMatches(sig: string, expected: string): boolean {
-  // Buffer.from(<non-hex>, "hex") silently truncates, so compare lengths first.
-  const a = Buffer.from(sig, "hex");
-  const b = Buffer.from(expected, "hex");
-  if (a.length === 0 || a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  // Reject anything that is not exactly a hex digest before parsing. Checking
+  // the parsed lengths is not enough: Buffer.from(<hex>, "hex") stops at the
+  // first invalid character, so a signature with junk appended parses to the
+  // same bytes as the real one and compared equal. Not forgery — you still need
+  // the correct digest first — but a token should have exactly one valid form.
+  if (!HEX_SIG.test(sig) || !HEX_SIG.test(expected)) return false;
+  return crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"));
 }
 
 // Job session tokens — issued when a kiosk successfully looks up a PIN, and
