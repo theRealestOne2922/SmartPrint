@@ -199,8 +199,19 @@ async function seedDefaultData() {
   // Initialize WebSocket relay for realtime updates (replaces Supabase Realtime)
   initWebSocket(httpServer);
 
-  // Start the background job to clean up orphan files in Supabase Storage.
-  startOrphanCleanupScheduler();
+  // Retention sweep: deletes every job past the retention window, and the files
+  // behind them. It runs once immediately and then hourly.
+  //
+  // Only in production, and that guard matters. The delete is database-wide —
+  // it is not scoped to jobs this process created — so a developer running
+  // against the shared cluster would wipe live jobs seconds after `npm run dev`,
+  // having done nothing but start the server. Set RUN_CLEANUP=1 to run it
+  // anyway when you are deliberately testing the sweep itself.
+  if (process.env.NODE_ENV === "production" || process.env.RUN_CLEANUP === "1") {
+    startOrphanCleanupScheduler();
+  } else {
+    console.log("[cleanup] Skipped: not production. Set RUN_CLEANUP=1 to force.");
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
