@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Label } from "@/components/ui/label";
 import {
   FileText, Settings, LogOut, Search, RefreshCw, Layers,
-  Lock, Printer, CheckCircle2, AlertCircle, Clock, ShieldCheck,
+  Lock, Printer, CheckCircle2, AlertCircle, Clock, ShieldCheck, UserCheck,
 } from "lucide-react";
 import { format } from "date-fns";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -61,6 +61,8 @@ export default function AdminDashboard() {
   const { toast } = useToast();
 
   const [jobs, setJobs] = useState<any[]>([]);
+  const [teachers, setTeachers] = useState<any[]>([]);
+  const [approving, setApproving] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -110,6 +112,13 @@ export default function AdminDashboard() {
       if (jobsRes.ok) {
         const printJobs = await jobsRes.json();
         if (printJobs) setJobs(printJobs);
+      }
+
+      // Staff accounts, so the approval queue is visible alongside the jobs.
+      const teachersRes = await fetch(`${API_BASE}/api/admin/teachers`, { headers: authHeaders() });
+      if (teachersRes.ok) {
+        const list = await teachersRes.json();
+        if (Array.isArray(list)) setTeachers(list);
       }
 
       // Fetch Settings via Express API (was: supabase.from("system_settings").select("*"))
@@ -210,6 +219,37 @@ export default function AdminDashboard() {
     }
   };
 
+  // Approve or revoke a staff account. A revoked account keeps its jobs and its
+  // history — it simply cannot sign in — so this is reversible either way.
+  const setApproval = async (teacher: any, approved: boolean) => {
+    setApproving(teacher.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/teachers/${teacher.id}/approval`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ approved }),
+      });
+      if (res.status === 401) {
+        handleAuthFailure();
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({ title: "Failed", description: body.message || "Could not update the account.", variant: "destructive" });
+        return;
+      }
+      setTeachers((prev) => prev.map((t) => (t.id === teacher.id ? { ...t, approved } : t)));
+      toast({
+        title: approved ? "Account approved" : "Access revoked",
+        description: `${teacher.name} (${teacher.email})`,
+      });
+    } catch {
+      toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
+    } finally {
+      setApproving(null);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "—";
     try {
@@ -266,6 +306,9 @@ export default function AdminDashboard() {
     const timeB = new Date(b.type === 'single' ? b.job.createdAt : b.jobs![0].createdAt).getTime();
     return timeB - timeA;
   });
+
+  const pendingTeachers = teachers.filter((t) => !t.approved);
+  const approvedTeachers = teachers.filter((t) => t.approved);
 
   const stats = {
     total: jobs.length,
@@ -518,8 +561,83 @@ export default function AdminDashboard() {
             </Card>
           </div>
 
-          {/* ─── RIGHT COLUMN: System Settings (1/3) ─── */}
+          {/* ─── RIGHT COLUMN: Staff accounts + System Settings (1/3) ─── */}
           <div className="space-y-6">
+            {/* Staff approval queue */}
+            <Card className="bg-white border-zinc-200 shadow-soft">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-zinc-950">
+                  <UserCheck className="w-5 h-5 text-primary" />
+                  Staff accounts
+                  {pendingTeachers.length > 0 && (
+                    <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200">
+                      {pendingTeachers.length} waiting
+                    </span>
+                  )}
+                </CardTitle>
+                <CardDescription className="text-zinc-500">
+                  Anyone can request an account. Only approved staff can sign in and print.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {pendingTeachers.length === 0 && approvedTeachers.length === 0 && (
+                  <p className="text-xs text-zinc-500">No staff accounts yet.</p>
+                )}
+
+                {pendingTeachers.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-600">
+                      Awaiting approval
+                    </p>
+                    {pendingTeachers.map((t) => (
+                      <div key={t.id} className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+                        <div className="font-semibold text-sm text-zinc-900 truncate">{t.name}</div>
+                        <div className="text-xs text-zinc-600 truncate">{t.email}</div>
+                        <div className="text-[11px] text-zinc-500 mt-0.5">
+                          Employee ID {t.empId} · requested {formatDate(t.createdAt)}
+                        </div>
+                        <div className="flex gap-2 mt-2.5">
+                          <button
+                            onClick={() => setApproval(t, true)}
+                            disabled={approving === t.id}
+                            className="flex-1 py-1.5 px-3 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                          >
+                            {approving === t.id ? "…" : "Approve"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {approvedTeachers.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                      Approved ({approvedTeachers.length})
+                    </p>
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                      {approvedTeachers.map((t) => (
+                        <div key={t.id} className="flex items-center gap-2 rounded-md border border-zinc-200 px-2.5 py-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-medium text-zinc-800 truncate">{t.name}</div>
+                            <div className="text-[11px] text-zinc-500 truncate">{t.email}</div>
+                          </div>
+                          <button
+                            onClick={() => setApproval(t, false)}
+                            disabled={approving === t.id}
+                            className="text-[11px] font-semibold text-zinc-400 hover:text-red-600 transition-colors disabled:opacity-50 shrink-0"
+                            title="Revoke sign-in access. Their jobs and history are kept."
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card className="bg-white border-zinc-200 shadow-soft lg:sticky lg:top-24">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-zinc-950">

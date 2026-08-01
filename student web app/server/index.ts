@@ -11,6 +11,7 @@ import { startOrphanCleanupScheduler } from "./cleanup";
 import { connectMongoDB } from "./mongodb";
 import { initWebSocket } from "./websocket";
 import { Admin } from "./models/Admin";
+import { Teacher } from "./models/Teacher";
 import { SystemSetting } from "./models/SystemSetting";
 import { hashPassword } from "./security";
 
@@ -158,6 +159,19 @@ async function seedDefaultData() {
 
     // No default teacher. Seeding one meant a real, loginable account with a
     // password committed to the repo. Staff register themselves.
+
+    // Teacher accounts now need admin approval before they can sign in. Every
+    // account that existed before that rule was already trusted and in use, so
+    // approve them here rather than locking working staff out of a system they
+    // were using yesterday. Runs once — after this, no document is missing the
+    // field, and the update matches nothing.
+    const migrated = await Teacher.updateMany(
+      { approved: { $exists: false } },
+      { $set: { approved: true } },
+    );
+    if (migrated.modifiedCount > 0) {
+      console.log(`[seed] ✅ Approved ${migrated.modifiedCount} pre-existing teacher account(s).`);
+    }
 
     // Seed settings if none exist
     const settingCount = await SystemSetting.countDocuments();

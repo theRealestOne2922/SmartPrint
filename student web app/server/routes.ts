@@ -710,7 +710,10 @@ export async function registerRoutes(
         department: 'General',
       });
 
-      res.status(201).json({ success: true, message: "Teacher account created" });
+      res.status(201).json({
+        success: true,
+        message: "Account requested. An administrator will approve it before you can sign in.",
+      });
     } catch (err: any) {
       console.error("Teacher registration error:", err);
       // A field the schema rejects is the caller's mistake, not a server fault.
@@ -746,6 +749,15 @@ export async function registerRoutes(
       }
       if (needsUpgrade) {
         await Teacher.updateOne({ _id: teacher._id }, { password: await hashPassword(password) });
+      }
+
+      // Checked after the password, deliberately. Rejecting earlier would let
+      // anyone probe which addresses have accounts by watching which ones
+      // answer "pending" instead of "invalid credentials".
+      if (teacher.approved === false) {
+        return res.status(403).json({
+          message: "This account is waiting for administrator approval.",
+        });
       }
 
       res.json({
@@ -910,6 +922,56 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Admin login error:", err);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Staff accounts, for the approval queue. Password and reset fields are never
+  // selected, so nothing sensitive travels even to an admin.
+  app.get("/api/admin/teachers", requireAdmin, async (_req, res) => {
+    try {
+      const teachers = await Teacher.find()
+        .select("name email empId department approved createdAt")
+        .sort({ approved: 1, createdAt: -1 })
+        .lean();
+      res.json(teachers.map((t) => ({ ...t, id: t._id })));
+    } catch (err: any) {
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  });
+
+  app.patch("/api/admin/teachers/:id/approval", requireAdmin, async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      if (!isObjectId(id)) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      if (typeof req.body?.approved !== "boolean") {
+        return res.status(400).json({ message: "approved must be true or false." });
+      }
+
+      const teacher = await Teacher.findByIdAndUpdate(
+        id,
+        { $set: { approved: req.body.approved } },
+        { new: true },
+      ).select("name email approved").lean();
+
+      if (!teacher) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      await AuditLog.create({
+        event: req.body.approved ? "teacher_approved" : "teacher_revoked",
+        printId: null,
+        ip: req.ip,
+        success: true,
+        detail: `${teacher.email} by ${(req as AuthedRequest).adminUsername}`,
+      }).catch(() => {});
+
+      res.json({ success: true, teacher: { ...teacher, id: teacher._id } });
+    } catch (err: any) {
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
     }
   });
 
