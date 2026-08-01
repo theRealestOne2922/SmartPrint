@@ -694,6 +694,12 @@ export async function registerRoutes(
       res.status(201).json({ success: true, message: "Teacher account created" });
     } catch (err: any) {
       console.error("Teacher registration error:", err);
+      // A field the schema rejects is the caller's mistake, not a server fault.
+      // Answering 500 both misreports it and reads, to anything scanning the
+      // API, as an unhandled exception reachable from a form field.
+      if (err?.name === "ValidationError") {
+        return res.status(400).json({ message: "Those details are not valid. Check the Employee ID and try again." });
+      }
       res.status(500).json({ message: "Internal server error" });
     }
   });
