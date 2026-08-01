@@ -8,6 +8,7 @@ export interface ITeacher {
   department: string | null;
   resetPasswordOtp?: string;
   resetPasswordExpires?: Date;
+  resetPasswordAttempts?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,6 +24,10 @@ const teacherSchema = new Schema<ITeacherDocument>(
     department: { type: String, default: null },
     resetPasswordOtp: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },
+    // Wrong guesses against the current code. Rate limiting is per address, so
+    // it does nothing about someone spread across many; a six digit code needs
+    // a bound that belongs to the account instead. See consumeOtp in routes.ts.
+    resetPasswordAttempts: { type: Number, default: 0 },
   },
   {
     timestamps: true,

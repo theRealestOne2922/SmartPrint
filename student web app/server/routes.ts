@@ -153,6 +153,49 @@ async function confidentialGuardFailed(
   return false;
 }
 
+// A reset code is six digits and lives for fifteen minutes. The limiter on
+// these routes counts per address, which is no obstacle to someone using more
+// than one — every fresh address bought another ten guesses at a code with only
+// a million possibilities, and a teacher account is worth taking: it is what
+// creates confidential jobs.
+//
+// So the code itself carries the budget. Five wrong guesses and it is destroyed
+// outright, wherever the guesses came from, and the owner has to request a new
+// one. Nobody can be locked out by this — the real teacher can always ask for
+// another code — and it cuts an attacker to five tries per email they send.
+const OTP_MAX_ATTEMPTS = 5;
+
+async function consumeOtp(email: string, otp: string) {
+  const teacher = await Teacher.findOne({ email });
+  if (!teacher?.resetPasswordOtp || !teacher.resetPasswordExpires) return null;
+  if (teacher.resetPasswordExpires.getTime() < Date.now()) return null;
+
+  const supplied = Buffer.from(otp, "utf8");
+  const actual = Buffer.from(String(teacher.resetPasswordOtp), "utf8");
+  const matches =
+    supplied.length === actual.length && crypto.timingSafeEqual(supplied, actual);
+
+  if (matches) return teacher;
+
+  const attempts = (teacher.resetPasswordAttempts ?? 0) + 1;
+  if (attempts >= OTP_MAX_ATTEMPTS) {
+    await Teacher.updateOne(
+      { _id: teacher._id },
+      { $unset: { resetPasswordOtp: 1, resetPasswordExpires: 1 }, $set: { resetPasswordAttempts: 0 } }
+    );
+    await AuditLog.create({
+      event: "otp_exhausted",
+      printId: null,
+      ip: null,
+      success: false,
+      detail: "reset code destroyed after too many wrong guesses",
+    }).catch(() => {});
+  } else {
+    await Teacher.updateOne({ _id: teacher._id }, { $set: { resetPasswordAttempts: attempts } });
+  }
+  return null;
+}
+
 // Bounds guessing against a single job regardless of how many addresses are
 // used. See the comment at the verification route.
 const FACULTY_ATTEMPT_LIMIT = 10;
@@ -743,6 +786,8 @@ export async function registerRoutes(
           $set: {
             resetPasswordOtp: otp,
             resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
+            // A fresh code gets a fresh budget.
+            resetPasswordAttempts: 0,
           },
         }
       );
@@ -766,12 +811,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Email and OTP are required" });
       }
 
-      const teacher = await Teacher.findOne({
-        email,
-        resetPasswordOtp: otp,
-        resetPasswordExpires: { $gt: new Date() } // Ensure it hasn't expired
-      });
-
+      const teacher = await consumeOtp(email, otp);
       if (!teacher) {
         return res.status(400).json({ message: "Invalid or expired OTP" });
       }
@@ -792,12 +832,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Email, OTP, and new password are required" });
       }
 
-      const teacher = await Teacher.findOne({
-        email,
-        resetPasswordOtp: otp,
-        resetPasswordExpires: { $gt: new Date() }
-      });
-
+      const teacher = await consumeOtp(email, otp);
       if (!teacher) {
         return res.status(400).json({ message: "Invalid or expired OTP" });
       }
@@ -806,7 +841,7 @@ export async function registerRoutes(
       await Teacher.updateOne(
         { _id: teacher._id },
         {
-          $set: { password: await hashPassword(newPassword) },
+          $set: { password: await hashPassword(newPassword), resetPasswordAttempts: 0 },
           $unset: { resetPasswordOtp: 1, resetPasswordExpires: 1 }
         }
       );
