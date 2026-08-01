@@ -7,6 +7,9 @@ export interface ITeacher {
   password: string;
   department: string | null;
   approved?: boolean;
+  failedLoginCount?: number;
+  lastFailedLoginAt?: Date | null;
+  lockedUntil?: Date | null;
   resetPasswordOtp?: string;
   resetPasswordExpires?: Date;
   resetPasswordAttempts?: number;
@@ -29,6 +32,14 @@ const teacherSchema = new Schema<ITeacherDocument>(
     // until an admin approves it. Accounts that predate this are approved by the
     // startup migration; nobody currently working gets locked out.
     approved: { type: Boolean, default: false },
+    // Failed sign-ins for this account, counted wherever they come from.
+    // The rate limiter on the login route counts per address, which buys an
+    // attacker another budget for every address they use; a password is worth
+    // more than that. Reset on success and after the window passes.
+    failedLoginCount: { type: Number, default: 0 },
+    lastFailedLoginAt: { type: Date, default: null },
+    lockedUntil: { type: Date, default: null },
+
     resetPasswordOtp: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },
     // Wrong guesses against the current code. Rate limiting is per address, so

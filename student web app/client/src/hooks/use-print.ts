@@ -145,7 +145,10 @@ export function useUploadFile() {
 // generated here and probed via a check-unique endpoint, which doubled as a
 // way for anyone to test whether a given code was live.
 export async function getUniqueJobId(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/print-jobs/new-code`, { method: 'POST' });
+  const res = await fetch(`${API_BASE}/api/print-jobs/new-code`, {
+    method: 'POST',
+    headers: teacherAuthHeaders(),
+  });
   if (!res.ok) {
     throw new Error('Could not get a print code. Please try again.');
   }

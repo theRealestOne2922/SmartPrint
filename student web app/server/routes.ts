@@ -164,6 +164,55 @@ async function confidentialGuardFailed(
   return false;
 }
 
+// Failed sign-ins, counted against the account rather than the caller.
+//
+// The limiter on the login routes counts per address, so every address an
+// attacker uses buys another ten attempts — the same weakness that made the
+// faculty ID and reset code limits ineffective. A password is the thing being
+// guessed here, so the budget has to belong to the account.
+//
+// Deliberately not a permanent lock: that would let anyone disable a colleague's
+// account by failing on purpose, which on an exam morning is its own attack.
+// Twenty failures inside fifteen minutes freezes sign-in for fifteen minutes,
+// then it clears itself. Slow enough to make guessing pointless, short enough
+// that nobody is meaningfully denied their own account.
+const LOGIN_MAX_FAILURES = 20;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+
+function accountLocked(account: { lockedUntil?: Date | null }): boolean {
+  return !!account.lockedUntil && account.lockedUntil.getTime() > Date.now();
+}
+
+async function recordLoginFailure(
+  model: typeof Teacher | typeof Admin,
+  account: { _id: any; failedLoginCount?: number; lastFailedLoginAt?: Date | null },
+) {
+  const now = Date.now();
+  const withinWindow =
+    account.lastFailedLoginAt && now - account.lastFailedLoginAt.getTime() < LOGIN_WINDOW_MS;
+  const count = (withinWindow ? account.failedLoginCount ?? 0 : 0) + 1;
+
+  if (count >= LOGIN_MAX_FAILURES) {
+    await (model as any).updateOne(
+      { _id: account._id },
+      { $set: { failedLoginCount: 0, lastFailedLoginAt: new Date(), lockedUntil: new Date(now + LOGIN_LOCK_MS) } },
+    );
+  } else {
+    await (model as any).updateOne(
+      { _id: account._id },
+      { $set: { failedLoginCount: count, lastFailedLoginAt: new Date() } },
+    );
+  }
+}
+
+async function clearLoginFailures(model: typeof Teacher | typeof Admin, id: any) {
+  await (model as any).updateOne(
+    { _id: id },
+    { $set: { failedLoginCount: 0, lockedUntil: null } },
+  );
+}
+
 // A reset code is six digits and lives for fifteen minutes. The limiter on
 // these routes counts per address, which is no obstacle to someone using more
 // than one — every fresh address bought another ten guesses at a code with only
@@ -501,7 +550,7 @@ export async function registerRoutes(
   // for finding live jobs that no rate limiter on lookup could compensate for.
   // The server picks the code now, so callers learn nothing about other jobs.
   // One code covers a whole batch, so the client asks once per batch.
-  app.post("/api/print-jobs/new-code", codeLimiter, async (_req, res) => {
+  app.post("/api/print-jobs/new-code", requireTeacher, codeLimiter, async (_req, res) => {
     try {
       for (let attempt = 0; attempt < 20; attempt++) {
         const jobId = generatePrintId();
@@ -763,10 +812,18 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
+      if (accountLocked(teacher)) {
+        return res.status(429).json({
+          message: "Too many failed sign-ins for this account. Try again in a few minutes.",
+        });
+      }
+
       const { ok, needsUpgrade } = await verifyPassword(password, teacher.password);
       if (!ok) {
+        await recordLoginFailure(Teacher, teacher);
         return res.status(401).json({ message: "Invalid credentials" });
       }
+      await clearLoginFailures(Teacher, teacher._id);
       if (needsUpgrade) {
         await Teacher.updateOne({ _id: teacher._id }, { password: await hashPassword(password) });
       }
@@ -930,10 +987,18 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
+      if (accountLocked(admin)) {
+        return res.status(429).json({
+          message: "Too many failed sign-ins for this account. Try again in a few minutes.",
+        });
+      }
+
       const { ok, needsUpgrade } = await verifyPassword(password, admin.passwordHash);
       if (!ok) {
+        await recordLoginFailure(Admin, admin);
         return res.status(401).json({ message: "Invalid credentials" });
       }
+      await clearLoginFailures(Admin, admin._id);
       if (needsUpgrade) {
         await Admin.updateOne({ _id: admin._id }, { passwordHash: await hashPassword(password) });
       }
