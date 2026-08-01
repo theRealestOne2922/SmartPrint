@@ -70,22 +70,33 @@ const jobCreateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Faculty ID / PIN lookup are brute-forceable if unthrottled (6-digit PIN = 10^6 space).
+// Keyed on the job, not the caller's address.
 //
-// These count FAILED attempts only (skipSuccessfulRequests). Guessing wrong
-// PINs or faculty IDs produces 4xx and gets throttled fast, while legitimate
-// traffic — the kiosk polling one valid PIN every 1.5s, or a whole campus
-// behind one NAT address — returns 2xx and is never penalised. Counting every
-// request instead would cut the kiosk off mid-print.
+// Keyed on the address, this throttled the wrong thing. The kiosk sits behind
+// campus NAT with everyone else, so six wrong guesses from one student blocked
+// faculty verification for every member of staff on that network — measured,
+// not assumed: after the limit tripped, the *correct* faculty ID also came back
+// 429. Meanwhile an attacker with several addresses just got six guesses each,
+// so it barely slowed the attack it was meant to stop.
+//
+// Per job, both of those invert. Someone attacking one print code can only ever
+// affect that print code, and no number of addresses buys extra attempts.
 const verifyFacultyLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 6,
   skipSuccessfulRequests: true,
-  message: { message: "Too many verification attempts. Please wait before trying again." },
+  keyGenerator: (req) => `verify:${req.params.printId}`,
+  message: { message: "Too many verification attempts for this job. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// A print code is six digits, so lookups are worth brute forcing if nothing
+// stops them. This counts FAILED attempts only: a code that exists returns 2xx
+// and never touches the budget, so the kiosk polling a real code every 1.5s,
+// and a whole campus behind one NAT address, are unaffected — the only traffic
+// it can throttle is guessing. Counting every request instead would cut the
+// kiosk off mid-print.
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -95,36 +106,18 @@ const lookupLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Per-address limits do nothing against someone spread across many addresses:
-// every new address is another 30 free guesses. A print code is six digits, and
-// what an attacker needs is not a *particular* code but *any* live one, so the
-// odds improve with every job on the system.
+// A server-wide bucket on failed lookups was tried here and removed. It does
+// bound a distributed sweep of the code space — but one bucket for everyone is
+// a switch any stranger can flip: burn the shared budget with junk codes and
+// the kiosk stops resolving real ones for everybody. For a system whose worst
+// day is an exam morning, handing out a trivial outage to prevent a slow,
+// partial attack is the wrong trade.
 //
-// This is one bucket for the whole server, and it counts only failures. A code
-// that exists returns 2xx and never touches it, so staff are unaffected — the
-// only traffic it can throttle is guessing. 300 wrong codes in fifteen minutes
-// is far more than the entire campus mistypes, and it caps a distributed sweep
-// at a rate that makes finding a live code take months rather than hours.
-const globalLookupFailureLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  skipSuccessfulRequests: true,
-  keyGenerator: () => "all-callers",
-  message: { message: "Too many invalid codes right now. Please try again shortly." },
-  standardHeaders: false,
-  legacyHeaders: false,
-});
-
-// Same reasoning for faculty verification, which is the more valuable target.
-const globalFacultyFailureLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  skipSuccessfulRequests: true,
-  keyGenerator: () => "all-callers",
-  message: { message: "Too many verification failures right now. Please try again shortly." },
-  standardHeaders: false,
-  legacyHeaders: false,
-});
+// What guessing a code actually yields is also limited now: responses no longer
+// carry the download URL, and releasing a confidential job still needs the
+// faculty ID, which is bounded per job below. The residual risk is deletion or
+// printing of a non-confidential job, against per-address limits and a 24 hour
+// retention window that keeps the target set small.
 
 // Bounds guessing against a single job regardless of how many addresses are
 // used. See the comment at the verification route.
@@ -571,7 +564,7 @@ export async function registerRoutes(
   // Get print job(s) by job ID. Rate-limited: this takes the same 6-digit PIN
   // as /api/jobs/lookup, so leaving it open would just be a way around that
   // endpoint's limiter.
-  app.get("/api/print-jobs/:jobId", globalLookupFailureLimiter, lookupLimiter, async (req, res) => {
+  app.get("/api/print-jobs/:jobId", lookupLimiter, async (req, res) => {
     try {
       const jobs = await PrintJob.find({ jobId: req.params.jobId }).lean();
       if (!jobs || jobs.length === 0) {
@@ -894,7 +887,7 @@ export async function registerRoutes(
   // API calls to these endpoints on the same origin.
 
   // Lookup job(s) by PIN (kiosk IdleScreen + hooks)
-  app.get("/api/jobs/lookup/:printId", globalLookupFailureLimiter, lookupLimiter, async (req, res) => {
+  app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {
     try {
       const { printId } = req.params;
       const jobs = await PrintJob.find({ jobId: printId }).lean();
@@ -914,7 +907,7 @@ export async function registerRoutes(
   // Server-side faculty verification for confidential jobs at the kiosk.
   // Replaces the old client-side compare — the correct empId is never sent
   // to the browser; only a signed, short-lived release token is returned.
-  app.post("/api/jobs/:printId/verify-faculty", globalFacultyFailureLimiter, verifyFacultyLimiter, async (req, res) => {
+  app.post("/api/jobs/:printId/verify-faculty", verifyFacultyLimiter, async (req, res) => {
     try {
       const printId = String(req.params.printId);
       const { facultyId } = req.body;
