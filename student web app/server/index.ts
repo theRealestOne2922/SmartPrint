@@ -70,24 +70,18 @@ app.use(cors({
   exposedHeaders: ["X-Job-Session"],
 }));
 
-declare module "http" {
-  interface IncomingMessage {
-    rawBody: unknown;
-  }
-}
+// 100kb is express.json's own default; stating it makes the bound visible
+// rather than incidental. rawBody used to be captured here for every request
+// and was never read by anything — it just kept a second copy of every body.
+app.use(express.json({ limit: "100kb" }));
 
-app.use(
-  express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
-);
+app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
-app.use(express.urlencoded({ extended: false }));
-
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+// Uploaded files are NOT served from here. There used to be a bare
+// express.static mount on this line, and because it ran before registerRoutes
+// it took precedence — so any access check added alongside the routes would
+// have been dead code while this quietly served every document to anyone.
+// The guarded handler lives in routes.ts.
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

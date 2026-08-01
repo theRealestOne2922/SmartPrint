@@ -31,6 +31,8 @@ import {
   hashPassword,
   verifyPassword,
   sanitizeJob,
+  signFileToken,
+  verifyFileToken,
 } from "./security";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
@@ -163,6 +165,32 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// Where this server is reachable from, used to build download URLs. Prefer
+// configuration; fall back to the request's own protocol and Host, which nginx
+// sets from the server block. Never X-Forwarded-Host: nginx does not send it,
+// so it is whatever the client typed.
+function publicBaseUrl(req: Request): string {
+  const configured = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+// A job's filePath is supplied by the client, and the Pi downloads whatever it
+// points at. Unchecked, that let anyone name any URL and have the agent fetch
+// it — attacker-controlled content sent to the printer, and a request made from
+// the Pi's position inside the campus network. Only this server's own uploads
+// are accepted.
+function isOwnUploadUrl(candidate: string, req: Request): boolean {
+  try {
+    const url = new URL(candidate);
+    const base = new URL(publicBaseUrl(req));
+    if (url.host !== base.host) return false;
+    return /^\/uploads\/[a-f0-9]{64}(\.[a-z0-9]{1,8})?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 // Rate limits alone cannot protect the disk: they are per address, and a campus
 // shares addresses, so any limit loose enough for real staff is loose enough to
 // accumulate gigabytes. This is the ceiling that does not care who is uploading
@@ -223,7 +251,27 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   // Serve uploaded files directly
-  app.use("/uploads", express.static(UPLOADS_DIR));
+  // Uploaded documents, served only to a caller holding a signature for that
+  // exact file. This replaces a bare express.static mount, which handed any
+  // file to anyone who named it.
+  app.get("/uploads/:filename", (req, res) => {
+    const filename = String(req.params.filename);
+
+    // Every stored name is <sha256>.<ext>, written by the upload handler.
+    // Refusing anything else keeps traversal sequences away from sendFile
+    // rather than relying on it to reject them.
+    if (!/^[a-f0-9]{64}(\.[a-z0-9]{1,8})?$/.test(filename)) {
+      return res.status(404).json({ message: "Not found." });
+    }
+
+    if (!verifyFileToken(filename, req.query.t)) {
+      return res.status(403).json({ message: "This download link is not valid or has expired." });
+    }
+
+    res.sendFile(path.join(UPLOADS_DIR, filename), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: "Not found." });
+    });
+  });
 
   // FILE UPLOAD — saves to local disk on the VM, not the database
   app.post("/api/upload", uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
@@ -270,10 +318,12 @@ export async function registerRoutes(
       // inside one 30s window still counts towards the ceiling.
       cachedUploadBytes += req.file.size;
 
-      // Construct the public URL for the uploaded file
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.headers['x-forwarded-host'] || req.get('host');
-      const publicUrl = `${protocol}://${host}/uploads/${filename}`;
+      // The URL the Pi will later fetch. It used to be assembled from
+      // X-Forwarded-Host, which nginx does not set and therefore any client
+      // could — so an uploader could make the server hand back a filePath
+      // pointing at a host they controlled. PUBLIC_BASE_URL is configuration,
+      // not a request header.
+      const publicUrl = `${publicBaseUrl(req)}/uploads/${filename}?t=${signFileToken(filename)}`;
 
       let pageCount = 1;
       if (req.file.mimetype === "application/pdf" || safeName.toLowerCase().endsWith(".pdf")) {
@@ -374,6 +424,14 @@ export async function registerRoutes(
         while (await PrintJob.findOne({ jobId })) {
           jobId = generatePrintId();
         }
+      }
+
+      // The Pi downloads and prints whatever this points at, so it has to be a
+      // file this server issued. Without the check, a caller could name any URL
+      // and have the agent fetch it — arbitrary content onto the printer, and a
+      // request originating from inside the campus network.
+      if (typeof filePath !== "string" || !isOwnUploadUrl(filePath, req)) {
+        return res.status(400).json({ message: "Invalid file reference. Upload the file first." });
       }
 
       let finalFilePath = filePath;

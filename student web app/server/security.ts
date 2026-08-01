@@ -123,6 +123,34 @@ export function requireTeacher(req: Request, res: Response, next: NextFunction) 
   next();
 }
 
+// Uploaded documents were served by a bare static mount: anything in the
+// directory went to anyone who asked for it by name. The name is a SHA-256 of
+// the file's own contents, so it is not guessable — but it was also handed out
+// by the API, and an unguessable URL is not access control. This is the pentest
+// finding "file can be accessed unauthorised".
+//
+// A download now needs a signature bound to that one filename. The Pi needs no
+// change for it: the token lives in the filePath stored on the job, which the Pi
+// reads from MongoDB rather than from the API.
+//
+// Seven days is far longer than a download ever needs — the Pi fetches within
+// minutes of a job being released — but it comfortably outlives the 24 hour
+// retention window, so a token never expires before the file it points at.
+const FILE_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function signFileToken(filename: string): string {
+  const exp = Date.now() + FILE_TOKEN_TTL_MS;
+  return `${exp}.${sign(`file.${filename}.${exp}`)}`;
+}
+
+export function verifyFileToken(filename: string, token: unknown): boolean {
+  if (!APP_SECRET || typeof token !== "string") return false;
+  const [expStr, sig] = token.split(".");
+  const exp = Number(expStr);
+  if (!exp || !sig || Date.now() > exp) return false;
+  return sigMatches(sig, sign(`file.${filename}.${exp}`));
+}
+
 // Optional network restriction for the admin surface, from the pentest note
 // "admin control page - ip based access". Set ADMIN_IP_ALLOWLIST to a comma
 // separated list of addresses or CIDR-less prefixes, e.g.
