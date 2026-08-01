@@ -237,6 +237,20 @@ export default function PrintWizard() {
 
   const isTeacher = typeof window !== 'undefined' ? !!localStorage.getItem("teacherId") : false;
 
+  // Printing requires a signed-in member of staff. The server enforces this —
+  // upload and job creation both reject an unauthenticated caller — so without
+  // the redirect the page would let someone fill in the whole wizard and fail
+  // at the end. Sending them to sign in first is the same rule, stated earlier.
+  useEffect(() => {
+    if (!localStorage.getItem("teacherToken")) {
+      toast({
+        title: "Please sign in",
+        description: "Printing is for VIT staff. Sign in to continue.",
+      });
+      setLocation("/teacher-login");
+    }
+  }, []);
+
   useEffect(() => {
     async function fetchSettings() {
       try {

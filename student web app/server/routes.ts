@@ -388,7 +388,14 @@ export async function registerRoutes(
   });
 
   // FILE UPLOAD — saves to local disk on the VM, not the database
-  app.post("/api/upload", uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
+  // Uploading requires a signed-in member of staff.
+  //
+  // This was open to anyone, which is what made every other control here a
+  // matter of damage limitation rather than prevention: a stranger could fill
+  // the disk, create jobs, and — because the faculty ID travelled in the request
+  // body — mark a job confidential under any identity they liked. SmartPrint at
+  // VIT is a staff tool, so it now asks who you are first.
+  app.post("/api/upload", requireTeacher, uploadLimiter, upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
@@ -503,13 +510,10 @@ export async function registerRoutes(
   });
 
   // Create print job
-  app.post("/api/print-jobs", jobCreateLimiter, async (req, res) => {
+  app.post("/api/print-jobs", requireTeacher, jobCreateLimiter, async (req, res) => {
     try {
       const {
         jobId: providedJobId,
-        studentName,
-        teacherEmpId,
-        teacherEmail,
         fileName,
         filePath,
         pageCount,
@@ -522,6 +526,21 @@ export async function registerRoutes(
         confidential,
         price: providedPrice,
       } = req.body;
+
+      // Who this job belongs to is taken from the signed token, never from the
+      // body. Sent by the client, teacherEmpId was a claim: anyone could mark a
+      // job confidential under a colleague's faculty ID — or their own — and the
+      // ID is exactly what releases it at the kiosk. Read from the account, it
+      // is a fact.
+      const teacherEmail = (req as AuthedRequest).teacherEmail!;
+      const teacher = await Teacher.findOne({ email: teacherEmail })
+        .select("empId name email")
+        .lean();
+      if (!teacher) {
+        return res.status(401).json({ message: "Please sign in again." });
+      }
+      const teacherEmpId = teacher.empId;
+      const studentName = teacher.name;
 
       // Validate before pricing so the quote and the job agree on the count.
       const copyCount = Math.floor(Number(copies));

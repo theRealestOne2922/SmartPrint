@@ -6,6 +6,14 @@ import { API_BASE } from "@/lib/api-config";
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 
+// Uploading and creating jobs now require a signed-in member of staff, and the
+// server takes the faculty identity from this token rather than from anything
+// the page sends — so a job can only ever be created as the person holding it.
+function teacherAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem("teacherToken");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export type UploadResponse = { filePath: string; fileName: string; pageCount: number };
 export type CreateJobInput = { studentName?: string; fileName: string; filePath: string; pageCount: number; colorMode: 'bw' | 'color'; copies: number; duplex: boolean; orientation: 'portrait' | 'landscape'; paperSize: 'a4' | 'a3'; pageRange: string; jobId?: string; confidential?: boolean; teacherEmail?: string };
 export type PrintJobResponse = any;
@@ -106,6 +114,7 @@ export function useUploadFile() {
 
       const response = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
+        headers: teacherAuthHeaders(),
         body: formData,
       });
 
@@ -158,18 +167,15 @@ export function useCreatePrintJob() {
       const pricePerPage = data.colorMode === "bw" ? 2 : 10;
       const price = data.pageCount * data.copies * pricePerPage;
 
-      const teacherEmpId = localStorage.getItem("teacherId");
-      const teacherEmail = localStorage.getItem("teacherEmail");
-
       // Create job via Express API (was: direct Supabase insert)
       const res = await fetch(`${API_BASE}/api/print-jobs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...teacherAuthHeaders() },
+        // studentName, teacherEmpId and teacherEmail are deliberately not sent.
+        // The server reads them from the signed-in account; sending them was
+        // what allowed a job to be created under someone else's faculty ID.
         body: JSON.stringify({
           jobId,
-          studentName: localStorage.getItem("teacherName") || data.studentName || "Student",
-          teacherEmpId: teacherEmpId || null,
-          teacherEmail: teacherEmail || null,
           fileName: data.fileName,
           filePath: data.filePath,
           pageCount: data.pageCount,
