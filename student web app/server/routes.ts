@@ -95,6 +95,42 @@ const lookupLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Per-address limits do nothing against someone spread across many addresses:
+// every new address is another 30 free guesses. A print code is six digits, and
+// what an attacker needs is not a *particular* code but *any* live one, so the
+// odds improve with every job on the system.
+//
+// This is one bucket for the whole server, and it counts only failures. A code
+// that exists returns 2xx and never touches it, so staff are unaffected — the
+// only traffic it can throttle is guessing. 300 wrong codes in fifteen minutes
+// is far more than the entire campus mistypes, and it caps a distributed sweep
+// at a rate that makes finding a live code take months rather than hours.
+const globalLookupFailureLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  skipSuccessfulRequests: true,
+  keyGenerator: () => "all-callers",
+  message: { message: "Too many invalid codes right now. Please try again shortly." },
+  standardHeaders: false,
+  legacyHeaders: false,
+});
+
+// Same reasoning for faculty verification, which is the more valuable target.
+const globalFacultyFailureLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  skipSuccessfulRequests: true,
+  keyGenerator: () => "all-callers",
+  message: { message: "Too many verification failures right now. Please try again shortly." },
+  standardHeaders: false,
+  legacyHeaders: false,
+});
+
+// Bounds guessing against a single job regardless of how many addresses are
+// used. See the comment at the verification route.
+const FACULTY_ATTEMPT_LIMIT = 10;
+const FACULTY_LOCKOUT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const statusLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -535,7 +571,7 @@ export async function registerRoutes(
   // Get print job(s) by job ID. Rate-limited: this takes the same 6-digit PIN
   // as /api/jobs/lookup, so leaving it open would just be a way around that
   // endpoint's limiter.
-  app.get("/api/print-jobs/:jobId", lookupLimiter, async (req, res) => {
+  app.get("/api/print-jobs/:jobId", globalLookupFailureLimiter, lookupLimiter, async (req, res) => {
     try {
       const jobs = await PrintJob.find({ jobId: req.params.jobId }).lean();
       if (!jobs || jobs.length === 0) {
@@ -858,7 +894,7 @@ export async function registerRoutes(
   // API calls to these endpoints on the same origin.
 
   // Lookup job(s) by PIN (kiosk IdleScreen + hooks)
-  app.get("/api/jobs/lookup/:printId", lookupLimiter, async (req, res) => {
+  app.get("/api/jobs/lookup/:printId", globalLookupFailureLimiter, lookupLimiter, async (req, res) => {
     try {
       const { printId } = req.params;
       const jobs = await PrintJob.find({ jobId: printId }).lean();
@@ -878,12 +914,35 @@ export async function registerRoutes(
   // Server-side faculty verification for confidential jobs at the kiosk.
   // Replaces the old client-side compare — the correct empId is never sent
   // to the browser; only a signed, short-lived release token is returned.
-  app.post("/api/jobs/:printId/verify-faculty", verifyFacultyLimiter, async (req, res) => {
+  app.post("/api/jobs/:printId/verify-faculty", globalFacultyFailureLimiter, verifyFacultyLimiter, async (req, res) => {
     try {
       const printId = String(req.params.printId);
       const { facultyId } = req.body;
       if (!facultyId || typeof facultyId !== "string") {
         return res.status(400).json({ message: "Faculty ID is required" });
+      }
+
+      // Per-job lockout, counted across every address.
+      //
+      // The IP limiter on this route gives each address six failures. An
+      // attacker with a hundred addresses therefore gets six hundred guesses,
+      // and a faculty ID is short — it is the last thing standing between a
+      // guessed print code and a printed exam paper. What has to be bounded is
+      // attempts against *this job*, wherever they come from.
+      //
+      // Ten is generous for someone typing their own ID, and a locked job cannot
+      // be used to deny anyone else: the lock is scoped to the one print code an
+      // attacker is already attacking.
+      const failedAttempts = await AuditLog.countDocuments({
+        event: "confidential_verify",
+        printId,
+        success: false,
+        createdAt: { $gt: new Date(Date.now() - FACULTY_LOCKOUT_WINDOW_MS) },
+      });
+      if (failedAttempts >= FACULTY_ATTEMPT_LIMIT) {
+        return res.status(423).json({
+          message: "This job has been locked after too many incorrect Faculty IDs. Ask the print desk to re-issue it.",
+        });
       }
 
       const job = await PrintJob.findOne({ jobId: printId, confidential: true })
