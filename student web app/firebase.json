@@ -26,6 +26,32 @@
                         "value": "no-cache, no-store, must-revalidate"
                     }
                 ]
+            },
+            {
+                "//": "Content Security Policy. The pages are served from here, not from Express, so this is where it has to live. script-src is 'self' with no unsafe-inline and no unsafe-eval: the build emits one external module and no inline script, so nothing legitimate needs them — and that is what stops an injected <script> from running at all. style-src keeps unsafe-inline because the component library sets style attributes directly on elements; style injection is a far smaller problem than script injection. connect-src names the API and its WebSocket explicitly, so even injected code has nowhere to send anything. frame-src allows the Google viewer used for Office previews and blob: for the generated booklet PDF. frame-ancestors 'none' is the clickjacking defence for the admin pages.",
+                "source": "**",
+                "headers": [
+                    {
+                        "key": "Content-Security-Policy",
+                        "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://140.245.224.137.nip.io wss://140.245.224.137.nip.io; frame-src 'self' blob: https://docs.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+                    },
+                    {
+                        "key": "X-Content-Type-Options",
+                        "value": "nosniff"
+                    },
+                    {
+                        "key": "Referrer-Policy",
+                        "value": "no-referrer"
+                    },
+                    {
+                        "key": "Permissions-Policy",
+                        "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+                    },
+                    {
+                        "key": "Strict-Transport-Security",
+                        "value": "max-age=15552000; includeSubDomains"
+                    }
+                ]
             }
         ]
     }
