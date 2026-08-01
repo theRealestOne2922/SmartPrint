@@ -165,15 +165,24 @@ async function confidentialGuardFailed(
 // another code — and it cuts an attacker to five tries per email they send.
 const OTP_MAX_ATTEMPTS = 5;
 
+// Six digits is a small space, so a plain digest would be trivially reversible
+// by trying all million. Keying the HMAC with APP_SECRET means a database on its
+// own is not enough to work backwards from.
+function hashOtp(otp: string): string {
+  return crypto.createHmac("sha256", process.env.APP_SECRET || "").update(`otp.${otp}`).digest("hex");
+}
+
 async function consumeOtp(email: string, otp: string) {
   const teacher = await Teacher.findOne({ email });
   if (!teacher?.resetPasswordOtp || !teacher.resetPasswordExpires) return null;
   if (teacher.resetPasswordExpires.getTime() < Date.now()) return null;
 
-  const supplied = Buffer.from(otp, "utf8");
-  const actual = Buffer.from(String(teacher.resetPasswordOtp), "utf8");
+  const supplied = Buffer.from(hashOtp(otp), "hex");
+  const actual = Buffer.from(String(teacher.resetPasswordOtp), "hex");
   const matches =
-    supplied.length === actual.length && crypto.timingSafeEqual(supplied, actual);
+    supplied.length > 0 &&
+    supplied.length === actual.length &&
+    crypto.timingSafeEqual(supplied, actual);
 
   if (matches) return teacher;
 
@@ -821,7 +830,11 @@ export async function registerRoutes(
         { _id: teacher._id },
         {
           $set: {
-            resetPasswordOtp: otp,
+            // Stored as a hash. The code goes to the owner's inbox; anyone
+            // reading the database — a backup, a stray dump, the operator —
+            // should not be handed a working password reset for every account
+            // with one outstanding.
+            resetPasswordOtp: hashOtp(otp),
             resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
             // A fresh code gets a fresh budget.
             resetPasswordAttempts: 0,
