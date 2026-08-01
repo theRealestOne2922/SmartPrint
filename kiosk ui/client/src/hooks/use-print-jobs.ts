@@ -27,6 +27,28 @@ function sessionHeader(printId: string): HeadersInit {
   return token ? { "X-Job-Session": token } : {};
 }
 
+// Release tokens, kept in memory for the same reason as job sessions: a kiosk
+// is a shared machine, and nothing that unlocks a document should outlive the
+// person standing at it.
+const releaseTokens = new Map<string, string>();
+
+export function rememberRelease(printId: string, token: string) {
+  releaseTokens.set(printId, token);
+}
+
+export function forgetRelease(printId: string) {
+  releaseTokens.delete(printId);
+}
+
+// The server withholds the file name on a confidential job until faculty has
+// been verified — a print code read over someone's shoulder should not reveal
+// which paper is being printed. Sending the token back on lookups is what makes
+// the real name appear once they have proved who they are.
+function releaseHeaderFor(printId: string): HeadersInit {
+  const token = releaseTokens.get(printId);
+  return token ? { "X-Release-Token": token } : {};
+}
+
 // MongoDB/Mongoose already returns camelCase — no snake_case mapping needed
 function mapJob(d: any) {
   return {
@@ -56,7 +78,9 @@ export function usePrintJob(printId: string | null, pollInterval?: number) {
       if (!printId) return null;
 
       // Fetch via Express API (was: supabase.from('print_jobs').select('*').eq('job_id', printId))
-      const res = await fetch(`${API_BASE}/api/jobs/lookup/${printId}`);
+      const res = await fetch(`${API_BASE}/api/jobs/lookup/${printId}`, {
+        headers: releaseHeaderFor(printId),
+      });
       if (!res.ok) {
         throw new Error("Job not found");
       }

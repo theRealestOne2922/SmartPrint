@@ -119,6 +119,17 @@ const lookupLimiter = rateLimit({
 // printing of a non-confidential job, against per-address limits and a 24 hour
 // retention window that keeps the target set small.
 
+// A confidential job's file name says which paper is about to be printed, and
+// a print code is easy to read off someone's screen. The name is withheld until
+// the faculty ID has been verified, exactly like the ability to change or print
+// the job. Everything else about the job stays visible so the kiosk can show
+// page counts and settings.
+function redactConfidential(job: any, req: Request): any {
+  if (!job?.confidential) return job;
+  if (verifyReleaseToken(String(job.jobId), req.headers["x-release-token"])) return job;
+  return { ...job, fileName: "Confidential document" };
+}
+
 // Knowing a print code is enough to look a job up, and that is by design — it
 // is what someone standing at the kiosk types. But it also means a code read
 // over a colleague's shoulder, or off a screen while they collect their pages,
@@ -675,7 +686,7 @@ export async function registerRoutes(
       if (!jobs || jobs.length === 0) {
         return res.status(404).json({ message: "Print job not found" });
       }
-      const mapped = jobs.map(j => sanitizeJob({ ...j, id: j._id }));
+      const mapped = jobs.map(j => redactConfidential(sanitizeJob({ ...j, id: j._id }), req));
       res.json(mapped.length === 1 ? mapped[0] : mapped);
     } catch (err: any) {
       console.error("Request failed:", err);
@@ -1066,7 +1077,7 @@ export async function registerRoutes(
       // Proof that this caller knew the PIN, required to edit/delete below.
       // Sent as a header so the response body shape stays unchanged.
       res.setHeader("X-Job-Session", signJobSession(String(printId)));
-      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
+      res.json(jobs.map(j => redactConfidential(sanitizeJob({ ...j, id: j._id }), req)));
     } catch (err: any) {
       console.error("Request failed:", err);
       res.status(500).json({ message: "Something went wrong. Please try again." });

@@ -1,5 +1,6 @@
 import { useLocation, useParams } from "wouter";
-import { usePrintJob, useUpdatePrintJobStatus, useUpdatePrintJobDetails, useDeletePrintJobItem, useVerifyFacultyAccess } from "@/hooks/use-print-jobs";
+import { usePrintJob, useUpdatePrintJobStatus, useUpdatePrintJobDetails, useDeletePrintJobItem, useVerifyFacultyAccess, rememberRelease, forgetRelease } from "@/hooks/use-print-jobs";
+import { useQueryClient } from "@tanstack/react-query";
 import { PageTransition } from "@/components/PageTransition";
 import { FileText, FileSearch, Loader2, ArrowLeft, CheckCircle2, Trash2, Plus, Minus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -14,6 +15,7 @@ export function JobConfirmationScreen() {
   const updateDetailsMutation = useUpdatePrintJobDetails();
   const deleteItemMutation = useDeletePrintJobItem();
   const verifyFacultyMutation = useVerifyFacultyAccess();
+  const queryClient = useQueryClient();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -124,6 +126,11 @@ export function JobConfirmationScreen() {
         setReleaseToken(data.token);
         setIsAuthenticated(true);
         setShowAuthModal(false);
+        // The server withholds a confidential job's file name until this point,
+        // so refetch now that we can prove who is standing here — otherwise the
+        // screen would keep showing "Confidential document" after verifying.
+        rememberRelease(printId, data.token);
+        queryClient.invalidateQueries({ queryKey: ['print-job', printId] });
       },
       onError: () => {
         setAuthError("Invalid Faculty ID. Please try again.");
