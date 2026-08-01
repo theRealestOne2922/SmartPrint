@@ -190,12 +190,25 @@ async function seedDefaultData() {
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
 
     console.error("Internal Server Error:", err);
 
     if (res.headersSent) {
       return next(err);
+    }
+
+    // err.message used to go straight back to the caller. For a malformed body
+    // that meant answering with the JSON parser's own diagnostics — "Expected
+    // property name or '}' in JSON at position 1" — which describes the runtime
+    // rather than the request. Anything unrecognised gets a fixed sentence; the
+    // real error is in the log.
+    let message = "Something went wrong. Please try again.";
+    if (err instanceof SyntaxError && status === 400) {
+      message = "Invalid request body.";
+    } else if (status === 413) {
+      message = "That request is too large.";
+    } else if (status === 400) {
+      message = "Invalid request.";
     }
 
     return res.status(status).json({ message });

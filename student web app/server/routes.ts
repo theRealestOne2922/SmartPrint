@@ -165,6 +165,14 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// Mongo throws a CastError when a route parameter is not a valid ObjectId, and
+// that surfaced as a 500 — an unhandled exception reachable by anyone typing
+// nonsense into a URL, which is both a scanner finding and a way to tell a
+// malformed id apart from one that simply does not exist.
+function isObjectId(value: string): boolean {
+  return /^[a-f0-9]{24}$/i.test(value);
+}
+
 // Where this server is reachable from, used to build download URLs. Prefer
 // configuration; fall back to the request's own protocol and Host, which nginx
 // sets from the server block. Never X-Forwarded-Host: nginx does not send it,
@@ -910,6 +918,9 @@ export async function registerRoutes(
   app.patch("/api/jobs/:id/details", async (req, res) => {
     try {
       const { id } = req.params;
+      if (!isObjectId(id)) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
 
       const owner = await PrintJob.findById(id).select("jobId").lean();
       if (!owner) {
@@ -952,6 +963,9 @@ export async function registerRoutes(
   app.delete("/api/jobs/:id", async (req, res) => {
     try {
       const { id } = req.params;
+      if (!isObjectId(id)) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
 
       const owner = await PrintJob.findById(id).select("jobId").lean();
       if (!owner) {
