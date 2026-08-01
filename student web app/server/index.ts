@@ -229,7 +229,20 @@ async function seedDefaultData() {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  const host = process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1";
+
+  // Listen on loopback only. In production this used to bind 0.0.0.0, which
+  // published the app on the VM's public address at :5000 — reachable without
+  // going through nginx at all. That meant plaintext HTTP for print codes,
+  // tokens and documents, and it turned "trust proxy" from a fix into a hole:
+  // with no nginx to overwrite X-Forwarded-For, Express believed whatever
+  // address the caller claimed. Verified against production before changing it —
+  // 45 failed print-code lookups, each with a different spoofed address, and not
+  // one was throttled. Every rate limit and the admin IP allowlist were bypassed
+  // by using the wrong port.
+  //
+  // nginx proxies to 127.0.0.1:5000, so loopback is all it ever needed.
+  // BIND_HOST exists for a deployment that genuinely fronts this differently.
+  const host = process.env.BIND_HOST || "127.0.0.1";
   httpServer.listen(port, host, () => {
     log(`serving on ${host}:${port}`);
   });
