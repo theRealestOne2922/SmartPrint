@@ -265,6 +265,13 @@ async function seedDefaultData() {
     res.status(404).json({ message: "Not found" });
   });
 
+  // Same for anything under /uploads that is not a single valid file name. The
+  // route above answers those; everything else was falling through to the SPA
+  // and returning the index page with a 200.
+  app.use("/uploads", (_req, res) => {
+    res.status(404).json({ message: "Not found" });
+  });
+
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
