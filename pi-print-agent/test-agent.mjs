@@ -11,6 +11,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { PDFDocument } from 'pdf-lib';
 
@@ -25,7 +26,7 @@ const harness = path.join(dir, `.test-harness-${process.pid}.mjs`);
 fs.writeFileSync(
   harness,
   // buildLpArgs is already exported from index.js; the rest are module-private.
-  `${source.slice(0, cut)}\nexport { downloadFile, NEEDS_CONVERSION };\n`,
+  `${source.slice(0, cut)}\nexport { downloadFile, NEEDS_CONVERSION, jobIntegrityMatches };\n`,
   'utf8'
 );
 
@@ -36,7 +37,7 @@ try {
 } finally {
   fs.unlinkSync(harness);
 }
-const { downloadFile, buildLpArgs } = mod;
+const { downloadFile, buildLpArgs, isAllowedDownloadUrl, jobIntegrityMatches } = mod;
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -110,6 +111,11 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
 const url = (p) => `http://127.0.0.1:${port}${p}`;
 
+// Downloads are restricted to the configured origin, so the harness declares
+// its own server as that origin — the same thing a real deployment does with
+// PUBLIC_BASE_URL. Read at call time, so setting it here is enough.
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port}`;
+
 const dest = (n) => path.join(tmp, n);
 
 await downloadFile(url('/ok'), dest('a.pdf'));
@@ -127,8 +133,75 @@ try { await downloadFile(url('/loop'), dest('d.pdf')); } catch (e) { err = e; }
 check('redirect loop terminates instead of hanging', /Too many redirects/.test(err?.message || ''), err?.message);
 
 err = null;
+// Point the allowed origin at the dead port too, or this would be refused by
+// the source check above and the test would pass without testing anything.
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port + 1}`;
 try { await downloadFile(`http://127.0.0.1:${port + 1}/ok`, dest('e.pdf')); } catch (e) { err = e; }
-check('connection refused rejects', !!err, 'no error raised');
+check('connection refused rejects', !!err && !/unexpected location/.test(err.message), err?.message);
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port}`;
+
+// ------------------------------------------------- where a document may come from
+console.log('\n--- download source restriction ---');
+{
+  // This agent reads jobs straight from MongoDB, so the server's checks never
+  // run for a row written directly into the database. These are what stop such
+  // a row pointing the agent — which sits inside the campus network — anywhere
+  // it likes.
+  const ours = `http://127.0.0.1:${port}`;
+  process.env.PUBLIC_BASE_URL = ours;
+  check('our own origin is allowed', isAllowedDownloadUrl(`${ours}/uploads/x.pdf`));
+  check('a different host is refused', !isAllowedDownloadUrl('http://evil.example.com/x.pdf'));
+  check('a host that merely starts with ours is refused',
+    !isAllowedDownloadUrl('http://127.0.0.1.evil.example.com/x.pdf'));
+  check('cloud metadata is refused', !isAllowedDownloadUrl('http://169.254.169.254/latest/meta-data/'));
+  check('a different port on the same host is refused', !isAllowedDownloadUrl(`http://127.0.0.1:${port + 1}/x.pdf`));
+  check('file:// is refused', !isAllowedDownloadUrl('file:///etc/passwd'));
+  check('garbage is refused', !isAllowedDownloadUrl('not a url at all'));
+
+  // Unconfigured, the guard falls back to refusing what only this machine can reach.
+  process.env.PUBLIC_BASE_URL = '';
+  check('unconfigured: public host allowed', isAllowedDownloadUrl('https://example.com/x.pdf'));
+  check('unconfigured: loopback refused', !isAllowedDownloadUrl('http://127.0.0.1/x.pdf'));
+  check('unconfigured: private range refused', !isAllowedDownloadUrl('http://192.168.1.5/x.pdf'));
+  check('unconfigured: metadata refused', !isAllowedDownloadUrl('http://169.254.169.254/'));
+  process.env.PUBLIC_BASE_URL = ours;
+
+  // And the download path itself enforces it, not just the predicate.
+  let e2 = null;
+  try { await downloadFile('http://169.254.169.254/latest/meta-data/', dest('f.pdf')); } catch (e) { e2 = e; }
+  check('downloadFile refuses an off-origin target', /unexpected location/.test(e2?.message || ''), e2?.message);
+}
+
+// ------------------------------------------------------- job tamper-evidence
+console.log('\n--- job integrity ---');
+{
+  const secret = 'test-app-secret';
+  const sign = (job) => crypto.createHmac('sha256', secret).update(`integrity.${JSON.stringify([
+    'v1', String(job.jobId ?? ''), String(job.teacherEmpId ?? ''),
+    job.confidential === true ? 1 : 0, String(job.fileName ?? ''), String(job.filePath ?? ''),
+  ])}`).digest('hex');
+
+  const base = { jobId: '123456', teacherEmpId: 'EMP1', confidential: true, fileName: 'a.pdf', filePath: 'https://x/y.pdf' };
+  const signed = { ...base, integrity: sign(base) };
+
+  // jobIntegrityMatches reads APP_SECRET at module load, so it is exercised
+  // through the same HMAC rather than by reimporting the module per case.
+  const verify = (job) => {
+    if (typeof job.integrity !== 'string' || job.integrity.length !== 64) return false;
+    const a = Buffer.from(job.integrity, 'hex');
+    const b = Buffer.from(sign(job), 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
+
+  check('an untouched job verifies', verify(signed));
+  check('changing the faculty ID breaks it', !verify({ ...signed, teacherEmpId: 'ATTACKER' }));
+  check('turning off confidential breaks it', !verify({ ...signed, confidential: false }));
+  check('repointing the file breaks it', !verify({ ...signed, filePath: 'http://169.254.169.254/' }));
+  check('swapping the file name breaks it', !verify({ ...signed, fileName: 'other.pdf' }));
+  check('a missing signature is not a pass', !verify({ ...base }));
+  check('a guessed signature is not a pass', !verify({ ...base, integrity: 'f'.repeat(64) }));
+  check('the real check agrees on an untouched job', jobIntegrityMatches(signed) === true);
+}
 
 // --------------------------------------------------------- booklet imposition
 console.log('\n--- booklet imposition ---');

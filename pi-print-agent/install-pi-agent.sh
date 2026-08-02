@@ -204,7 +204,7 @@ cat << 'EOF' > "$INSTALL_DIR/package.json"
     },
     "dependencies": {
         "dotenv": "^16.4.5",
-        "mongoose": "^9.6.3",
+        "mongoose": "^9.9.1",
         "pdf-lib": "^1.17.1"
     }
 }
@@ -280,6 +280,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { PDFDocument } from 'pdf-lib';
 
@@ -294,7 +295,7 @@ const harness = path.join(dir, `.test-harness-${process.pid}.mjs`);
 fs.writeFileSync(
   harness,
   // buildLpArgs is already exported from index.js; the rest are module-private.
-  `${source.slice(0, cut)}\nexport { downloadFile, NEEDS_CONVERSION };\n`,
+  `${source.slice(0, cut)}\nexport { downloadFile, NEEDS_CONVERSION, jobIntegrityMatches };\n`,
   'utf8'
 );
 
@@ -305,7 +306,7 @@ try {
 } finally {
   fs.unlinkSync(harness);
 }
-const { downloadFile, buildLpArgs } = mod;
+const { downloadFile, buildLpArgs, isAllowedDownloadUrl, jobIntegrityMatches } = mod;
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -379,6 +380,11 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
 const url = (p) => `http://127.0.0.1:${port}${p}`;
 
+// Downloads are restricted to the configured origin, so the harness declares
+// its own server as that origin — the same thing a real deployment does with
+// PUBLIC_BASE_URL. Read at call time, so setting it here is enough.
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port}`;
+
 const dest = (n) => path.join(tmp, n);
 
 await downloadFile(url('/ok'), dest('a.pdf'));
@@ -396,8 +402,75 @@ try { await downloadFile(url('/loop'), dest('d.pdf')); } catch (e) { err = e; }
 check('redirect loop terminates instead of hanging', /Too many redirects/.test(err?.message || ''), err?.message);
 
 err = null;
+// Point the allowed origin at the dead port too, or this would be refused by
+// the source check above and the test would pass without testing anything.
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port + 1}`;
 try { await downloadFile(`http://127.0.0.1:${port + 1}/ok`, dest('e.pdf')); } catch (e) { err = e; }
-check('connection refused rejects', !!err, 'no error raised');
+check('connection refused rejects', !!err && !/unexpected location/.test(err.message), err?.message);
+process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port}`;
+
+// ------------------------------------------------- where a document may come from
+console.log('\n--- download source restriction ---');
+{
+  // This agent reads jobs straight from MongoDB, so the server's checks never
+  // run for a row written directly into the database. These are what stop such
+  // a row pointing the agent — which sits inside the campus network — anywhere
+  // it likes.
+  const ours = `http://127.0.0.1:${port}`;
+  process.env.PUBLIC_BASE_URL = ours;
+  check('our own origin is allowed', isAllowedDownloadUrl(`${ours}/uploads/x.pdf`));
+  check('a different host is refused', !isAllowedDownloadUrl('http://evil.example.com/x.pdf'));
+  check('a host that merely starts with ours is refused',
+    !isAllowedDownloadUrl('http://127.0.0.1.evil.example.com/x.pdf'));
+  check('cloud metadata is refused', !isAllowedDownloadUrl('http://169.254.169.254/latest/meta-data/'));
+  check('a different port on the same host is refused', !isAllowedDownloadUrl(`http://127.0.0.1:${port + 1}/x.pdf`));
+  check('file:// is refused', !isAllowedDownloadUrl('file:///etc/passwd'));
+  check('garbage is refused', !isAllowedDownloadUrl('not a url at all'));
+
+  // Unconfigured, the guard falls back to refusing what only this machine can reach.
+  process.env.PUBLIC_BASE_URL = '';
+  check('unconfigured: public host allowed', isAllowedDownloadUrl('https://example.com/x.pdf'));
+  check('unconfigured: loopback refused', !isAllowedDownloadUrl('http://127.0.0.1/x.pdf'));
+  check('unconfigured: private range refused', !isAllowedDownloadUrl('http://192.168.1.5/x.pdf'));
+  check('unconfigured: metadata refused', !isAllowedDownloadUrl('http://169.254.169.254/'));
+  process.env.PUBLIC_BASE_URL = ours;
+
+  // And the download path itself enforces it, not just the predicate.
+  let e2 = null;
+  try { await downloadFile('http://169.254.169.254/latest/meta-data/', dest('f.pdf')); } catch (e) { e2 = e; }
+  check('downloadFile refuses an off-origin target', /unexpected location/.test(e2?.message || ''), e2?.message);
+}
+
+// ------------------------------------------------------- job tamper-evidence
+console.log('\n--- job integrity ---');
+{
+  const secret = 'test-app-secret';
+  const sign = (job) => crypto.createHmac('sha256', secret).update(`integrity.${JSON.stringify([
+    'v1', String(job.jobId ?? ''), String(job.teacherEmpId ?? ''),
+    job.confidential === true ? 1 : 0, String(job.fileName ?? ''), String(job.filePath ?? ''),
+  ])}`).digest('hex');
+
+  const base = { jobId: '123456', teacherEmpId: 'EMP1', confidential: true, fileName: 'a.pdf', filePath: 'https://x/y.pdf' };
+  const signed = { ...base, integrity: sign(base) };
+
+  // jobIntegrityMatches reads APP_SECRET at module load, so it is exercised
+  // through the same HMAC rather than by reimporting the module per case.
+  const verify = (job) => {
+    if (typeof job.integrity !== 'string' || job.integrity.length !== 64) return false;
+    const a = Buffer.from(job.integrity, 'hex');
+    const b = Buffer.from(sign(job), 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
+
+  check('an untouched job verifies', verify(signed));
+  check('changing the faculty ID breaks it', !verify({ ...signed, teacherEmpId: 'ATTACKER' }));
+  check('turning off confidential breaks it', !verify({ ...signed, confidential: false }));
+  check('repointing the file breaks it', !verify({ ...signed, filePath: 'http://169.254.169.254/' }));
+  check('swapping the file name breaks it', !verify({ ...signed, fileName: 'other.pdf' }));
+  check('a missing signature is not a pass', !verify({ ...base }));
+  check('a guessed signature is not a pass', !verify({ ...base, integrity: 'f'.repeat(64) }));
+  check('the real check agrees on an untouched job', jobIntegrityMatches(signed) === true);
+}
 
 // --------------------------------------------------------- booklet imposition
 console.log('\n--- booklet imposition ---');
@@ -497,6 +570,43 @@ function decryptFileEnvelope(ciphertext, fields) {
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
+// Tamper-evidence, checked on the side that actually prints.
+//
+// The server signs the fields that decide who may print a job — print code,
+// faculty ID, confidential flag, file name, file path — and verifies that
+// before releasing one. This agent does not go through the server, so that
+// check would be skipped entirely for a row written directly into the database.
+// Verifying it here is what makes the signature mean something at the printer.
+//
+// Must stay in step with signJobIntegrity in "student web app/server/security.ts".
+const APP_SECRET = process.env.APP_SECRET || '';
+if (!APP_SECRET) {
+    console.warn('⚠️  APP_SECRET not set — cannot verify that jobs were created by our server.');
+    console.warn('    Set it in .env, matching the backend, so altered records are refused.');
+}
+
+function jobIntegrityMatches(job) {
+    // Without the secret there is nothing to check against. Deliberately not a
+    // refusal: an agent that cannot verify should still print, loudly warning,
+    // rather than silently stopping every job on an exam morning because one
+    // environment variable was missed.
+    if (!APP_SECRET) return true;
+    if (typeof job.integrity !== 'string' || job.integrity.length !== 64) return false;
+
+    const payload = JSON.stringify([
+        'v1',
+        String(job.jobId ?? ''),
+        String(job.teacherEmpId ?? ''),
+        job.confidential === true ? 1 : 0,
+        String(job.fileName ?? ''),
+        String(job.filePath ?? ''),
+    ]);
+    const expected = crypto.createHmac('sha256', APP_SECRET).update(`integrity.${payload}`).digest('hex');
+    const a = Buffer.from(job.integrity, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // Extensions that need conversion to PDF before printing.
 // IPP Everywhere driver only accepts PDF — images and Office docs must be converted.
 const NEEDS_CONVERSION = new Set([
@@ -505,12 +615,84 @@ const NEEDS_CONVERSION = new Set([
     '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'
 ]);
 
+// Where a document may legitimately come from.
+//
+// This agent takes its work straight from MongoDB — it never asks the API — so
+// none of the server's checks apply to it. The server refuses a filePath that
+// is not one of ours when a job is created; a row written directly into the
+// database never passes through that. Anyone able to write to this collection
+// could therefore insert a job with status 'printing' and any URL at all, and
+// this agent, sitting inside the campus network, would fetch it.
+//
+// So the same rule is enforced here, on the side that actually opens the
+// connection, and on every redirect hop rather than only the first.
+// Read at call time, not at import. The value is fixed in practice — the agent
+// restarts to pick up a changed .env — but reading it here keeps the guard
+// testable without the test having to know the port before it opens a socket.
+const allowedFileBase = () => (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+if (!allowedFileBase()) {
+    console.warn('⚠️  PUBLIC_BASE_URL not set — cannot confirm documents come from our own server.');
+    console.warn('    Private and loopback addresses are still refused, but set it in .env.');
+}
+
+// Refused whether or not PUBLIC_BASE_URL is configured. A misconfigured agent
+// should still not be usable as a way to reach things only it can see.
+function isPrivateHost(hostname) {
+    const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h === '0.0.0.0') return true;
+    // IPv4 private, loopback, link-local (169.254.x covers cloud metadata), CGNAT.
+    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+        const [a, b] = [Number(m[1]), Number(m[2])];
+        if (a === 10 || a === 127 || a === 0) return true;
+        if (a === 169 && b === 254) return true;
+        if (a === 172 && b >= 16 && b <= 31) return true;
+        if (a === 192 && b === 168) return true;
+        if (a === 100 && b >= 64 && b <= 127) return true;
+    }
+    if (h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
+    return false;
+}
+
+export function isAllowedDownloadUrl(url) {
+    let u;
+    try {
+        u = new URL(url);
+    } catch {
+        return false;
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+
+    // Configured: the origin has to be that one, and nothing else matters.
+    // Compared as an origin rather than a string prefix, because
+    // "https://ours.example.evil.com" starts with the base as text while being
+    // an entirely different host. A base pointing at loopback is the operator
+    // saying so deliberately — a development server, or the agent's own test
+    // harness — and is not the case this guard exists for.
+    const base = allowedFileBase();
+    if (base) {
+        try {
+            return u.origin === new URL(base).origin;
+        } catch {
+            return false;
+        }
+    }
+
+    // Unconfigured: no way to know what "ours" means, so fall back to refusing
+    // the addresses that only this machine can reach. Weaker, but it keeps a
+    // misconfigured agent from being a route into the campus network.
+    return !isPrivateHost(u.hostname);
+}
+
 // Download file from URL (follows redirects)
 const DOWNLOAD_TIMEOUT_MS = 60000;
 const MAX_REDIRECTS = 5;
 
 function downloadFile(url, destPath, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve, reject) => {
+        if (!isAllowedDownloadUrl(url)) {
+            return reject(new Error(`Refusing to download from an unexpected location: ${String(url).slice(0, 120)}`));
+        }
         const proto = url.startsWith('https') ? https : http;
         const file = createWriteStream(destPath, { mode: 0o600 });
         let settled = false;
@@ -720,6 +902,22 @@ async function processJob(job) {
         // Use the freshly-read document: a change-stream payload can be stale if
         // the job was edited between the update and this handler running.
         job = claimed;
+
+        // Checked against the record we just re-read, so a row altered between
+        // being written and being claimed is caught here rather than printed.
+        if (!jobIntegrityMatches(job)) {
+            console.error(`[JOB ${job.jobId}] 🛑 Record does not match its signature — refusing to print.`);
+            console.error(`[JOB ${job.jobId}]    This job was altered outside the application. Re-issue it from the dashboard.`);
+            await PrintJob.updateOne({ _id: job._id }, { status: 'failed' }).catch(() => {});
+            activeJobs.delete(jobKey);
+            return;
+        }
+        if (!isAllowedDownloadUrl(job.filePath)) {
+            console.error(`[JOB ${job.jobId}] 🛑 Document is not on our own server — refusing to fetch it.`);
+            await PrintJob.updateOne({ _id: job._id }, { status: 'failed' }).catch(() => {});
+            activeJobs.delete(jobKey);
+            return;
+        }
     } catch (err) {
         console.error(`[JOB ${job.jobId}] Failed to claim job:`, err.message);
         activeJobs.delete(jobKey);
@@ -1350,6 +1548,25 @@ MONGODB_URI=
 # this is what unwraps the key for confidential documents. If it differs,
 # confidential jobs fail to decrypt and will not print.
 MASTER_KEY=
+
+# Where documents may be fetched from, e.g. https://api.example.edu
+# Must match the backend's PUBLIC_BASE_URL.
+#
+# This agent takes its work straight from MongoDB and never asks the API, so
+# none of the server's checks apply to it. Without this, a job row written
+# directly into the database could point the agent at any URL at all — and it
+# runs inside the campus network. Private and loopback addresses are refused
+# either way, but set this so only our own server is accepted.
+PUBLIC_BASE_URL=
+
+# Must match the backend's APP_SECRET.
+#
+# The server signs the fields that decide who may print a job. With this set,
+# the agent refuses a record whose signature does not match — so altering a job
+# in the database does not get it printed. Left blank, jobs still print and the
+# agent warns at startup; it is not a hard requirement, so a missed variable
+# cannot stop an exam morning.
+APP_SECRET=
 
 # Hours to retain completed jobs before cleanup (default 24)
 CLEANUP_HOURS=24

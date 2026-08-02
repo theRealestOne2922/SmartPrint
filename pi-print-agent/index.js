@@ -56,6 +56,43 @@ function decryptFileEnvelope(ciphertext, fields) {
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
+// Tamper-evidence, checked on the side that actually prints.
+//
+// The server signs the fields that decide who may print a job — print code,
+// faculty ID, confidential flag, file name, file path — and verifies that
+// before releasing one. This agent does not go through the server, so that
+// check would be skipped entirely for a row written directly into the database.
+// Verifying it here is what makes the signature mean something at the printer.
+//
+// Must stay in step with signJobIntegrity in "student web app/server/security.ts".
+const APP_SECRET = process.env.APP_SECRET || '';
+if (!APP_SECRET) {
+    console.warn('⚠️  APP_SECRET not set — cannot verify that jobs were created by our server.');
+    console.warn('    Set it in .env, matching the backend, so altered records are refused.');
+}
+
+function jobIntegrityMatches(job) {
+    // Without the secret there is nothing to check against. Deliberately not a
+    // refusal: an agent that cannot verify should still print, loudly warning,
+    // rather than silently stopping every job on an exam morning because one
+    // environment variable was missed.
+    if (!APP_SECRET) return true;
+    if (typeof job.integrity !== 'string' || job.integrity.length !== 64) return false;
+
+    const payload = JSON.stringify([
+        'v1',
+        String(job.jobId ?? ''),
+        String(job.teacherEmpId ?? ''),
+        job.confidential === true ? 1 : 0,
+        String(job.fileName ?? ''),
+        String(job.filePath ?? ''),
+    ]);
+    const expected = crypto.createHmac('sha256', APP_SECRET).update(`integrity.${payload}`).digest('hex');
+    const a = Buffer.from(job.integrity, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // Extensions that need conversion to PDF before printing.
 // IPP Everywhere driver only accepts PDF — images and Office docs must be converted.
 const NEEDS_CONVERSION = new Set([
@@ -64,12 +101,84 @@ const NEEDS_CONVERSION = new Set([
     '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'
 ]);
 
+// Where a document may legitimately come from.
+//
+// This agent takes its work straight from MongoDB — it never asks the API — so
+// none of the server's checks apply to it. The server refuses a filePath that
+// is not one of ours when a job is created; a row written directly into the
+// database never passes through that. Anyone able to write to this collection
+// could therefore insert a job with status 'printing' and any URL at all, and
+// this agent, sitting inside the campus network, would fetch it.
+//
+// So the same rule is enforced here, on the side that actually opens the
+// connection, and on every redirect hop rather than only the first.
+// Read at call time, not at import. The value is fixed in practice — the agent
+// restarts to pick up a changed .env — but reading it here keeps the guard
+// testable without the test having to know the port before it opens a socket.
+const allowedFileBase = () => (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+if (!allowedFileBase()) {
+    console.warn('⚠️  PUBLIC_BASE_URL not set — cannot confirm documents come from our own server.');
+    console.warn('    Private and loopback addresses are still refused, but set it in .env.');
+}
+
+// Refused whether or not PUBLIC_BASE_URL is configured. A misconfigured agent
+// should still not be usable as a way to reach things only it can see.
+function isPrivateHost(hostname) {
+    const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h === '0.0.0.0') return true;
+    // IPv4 private, loopback, link-local (169.254.x covers cloud metadata), CGNAT.
+    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+        const [a, b] = [Number(m[1]), Number(m[2])];
+        if (a === 10 || a === 127 || a === 0) return true;
+        if (a === 169 && b === 254) return true;
+        if (a === 172 && b >= 16 && b <= 31) return true;
+        if (a === 192 && b === 168) return true;
+        if (a === 100 && b >= 64 && b <= 127) return true;
+    }
+    if (h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
+    return false;
+}
+
+export function isAllowedDownloadUrl(url) {
+    let u;
+    try {
+        u = new URL(url);
+    } catch {
+        return false;
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+
+    // Configured: the origin has to be that one, and nothing else matters.
+    // Compared as an origin rather than a string prefix, because
+    // "https://ours.example.evil.com" starts with the base as text while being
+    // an entirely different host. A base pointing at loopback is the operator
+    // saying so deliberately — a development server, or the agent's own test
+    // harness — and is not the case this guard exists for.
+    const base = allowedFileBase();
+    if (base) {
+        try {
+            return u.origin === new URL(base).origin;
+        } catch {
+            return false;
+        }
+    }
+
+    // Unconfigured: no way to know what "ours" means, so fall back to refusing
+    // the addresses that only this machine can reach. Weaker, but it keeps a
+    // misconfigured agent from being a route into the campus network.
+    return !isPrivateHost(u.hostname);
+}
+
 // Download file from URL (follows redirects)
 const DOWNLOAD_TIMEOUT_MS = 60000;
 const MAX_REDIRECTS = 5;
 
 function downloadFile(url, destPath, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve, reject) => {
+        if (!isAllowedDownloadUrl(url)) {
+            return reject(new Error(`Refusing to download from an unexpected location: ${String(url).slice(0, 120)}`));
+        }
         const proto = url.startsWith('https') ? https : http;
         const file = createWriteStream(destPath, { mode: 0o600 });
         let settled = false;
@@ -279,6 +388,22 @@ async function processJob(job) {
         // Use the freshly-read document: a change-stream payload can be stale if
         // the job was edited between the update and this handler running.
         job = claimed;
+
+        // Checked against the record we just re-read, so a row altered between
+        // being written and being claimed is caught here rather than printed.
+        if (!jobIntegrityMatches(job)) {
+            console.error(`[JOB ${job.jobId}] 🛑 Record does not match its signature — refusing to print.`);
+            console.error(`[JOB ${job.jobId}]    This job was altered outside the application. Re-issue it from the dashboard.`);
+            await PrintJob.updateOne({ _id: job._id }, { status: 'failed' }).catch(() => {});
+            activeJobs.delete(jobKey);
+            return;
+        }
+        if (!isAllowedDownloadUrl(job.filePath)) {
+            console.error(`[JOB ${job.jobId}] 🛑 Document is not on our own server — refusing to fetch it.`);
+            await PrintJob.updateOne({ _id: job._id }, { status: 'failed' }).catch(() => {});
+            activeJobs.delete(jobKey);
+            return;
+        }
     } catch (err) {
         console.error(`[JOB ${job.jobId}] Failed to claim job:`, err.message);
         activeJobs.delete(jobKey);
