@@ -33,14 +33,19 @@ export default function TeacherRegister() {
         body: JSON.stringify({ name, email, password, empId }),
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.message || "Registration failed");
+        throw new Error(data.message || "Registration failed");
       }
 
+      // Show what the server actually said. This used to claim the account was
+      // created and ready to sign in, which is wrong on both counts now: new
+      // accounts wait for an administrator, and a duplicate creates nothing at
+      // all. A teacher told "you can now log in" and then refused would read it
+      // as the system being broken.
       toast({
-        title: "Account Created Successfully!",
-        description: "You can now log in with your credentials.",
+        title: "Registration received",
+        description: data.message || "An administrator will approve your account before you can sign in.",
       });
       setLocation("/teacher-login");
     } catch (err: any) {
