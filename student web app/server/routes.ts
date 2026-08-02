@@ -81,9 +81,15 @@ const jobCreateLimiter = rateLimit({
 //
 // Per job, both of those invert. Someone attacking one print code can only ever
 // affect that print code, and no number of addresses buys extra attempts.
+// Named so the dashboard can work out whether this bound is currently blocking
+// a job. Two things can lock a job — this short window and the 24-hour count
+// below it — and an admin looking at the list needs to see either.
+const VERIFY_BURST_WINDOW_MS = 15 * 60 * 1000;
+const VERIFY_BURST_MAX = 6;
+
 const verifyFacultyLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 6,
+  windowMs: VERIFY_BURST_WINDOW_MS,
+  max: VERIFY_BURST_MAX,
   skipSuccessfulRequests: true,
   keyGenerator: (req) => `verify:${req.params.printId}`,
   message: { message: "Too many verification attempts for this job. Please wait before trying again." },
@@ -688,20 +694,43 @@ export async function registerRoutes(
       // Which confidential jobs are currently locked out by wrong faculty IDs.
       // One grouped count rather than a query per job — and only for the codes
       // on this page, so it stays bounded as the collection grows.
+      // Two separate bounds can be refusing a job, and the dashboard has to
+      // show either — showing only the 24-hour one meant an admin saw "fine"
+      // while the owner was being turned away by the 15-minute one.
+      //
+      // A blocked request never reaches the handler and so writes no audit row,
+      // which makes the rows that DID land the signal: once this job has hit
+      // the burst limit inside the burst window, the limiter is turning
+      // everything away, this request included.
       const codes = jobs.filter((j) => j.confidential).map((j) => j.jobId);
       const lockedCodes = new Set<string>();
       if (codes.length) {
+        const now = Date.now();
+        const burstCutoff = new Date(now - VERIFY_BURST_WINDOW_MS);
         const grouped = await AuditLog.aggregate([
           {
             $match: {
               event: "confidential_verify",
               success: false,
               printId: { $in: codes },
-              createdAt: { $gt: new Date(Date.now() - FACULTY_LOCKOUT_WINDOW_MS) },
+              createdAt: { $gt: new Date(now - FACULTY_LOCKOUT_WINDOW_MS) },
             },
           },
-          { $group: { _id: "$printId", failures: { $sum: 1 } } },
-          { $match: { failures: { $gte: FACULTY_ATTEMPT_LIMIT } } },
+          {
+            $group: {
+              _id: "$printId",
+              failures: { $sum: 1 },
+              recent: { $sum: { $cond: [{ $gt: ["$createdAt", burstCutoff] }, 1, 0] } },
+            },
+          },
+          {
+            $match: {
+              $or: [
+                { failures: { $gte: FACULTY_ATTEMPT_LIMIT } },
+                { recent: { $gte: VERIFY_BURST_MAX } },
+              ],
+            },
+          },
         ]);
         for (const g of grouped) lockedCodes.add(String(g._id));
       }
