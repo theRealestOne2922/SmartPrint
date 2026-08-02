@@ -321,15 +321,59 @@ const ALLOWED_EXTENSIONS = [
   '.odt', '.ods', '.odp', '.txt',
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
 ];
-const ALLOWED_MIME_TYPES = [
-  'application/pdf',
-  'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.oasis.opendocument.text', 'application/vnd.oasis.opendocument.spreadsheet', 'application/vnd.oasis.opendocument.presentation',
-  'text/plain',
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+// Magic numbers, checked against the bytes actually uploaded. Grouped by the
+// container format rather than by extension: every modern Office and
+// OpenDocument file is a ZIP, and every legacy one is an OLE2 compound file, so
+// the useful question is "is this really a zip" and not "is this really a pptx".
+// Telling pptx from xlsx is the converter's job; keeping a shell script from
+// reaching the converter at all is this function's.
+const CONTENT_SIGNATURES: Array<{ exts: string[]; matches: (b: Buffer) => boolean }> = [
+  { exts: ['.pdf'], matches: (b) => b.subarray(0, 5).toString('latin1') === '%PDF-' },
+  // ZIP local file header — docx/pptx/xlsx/odt/ods/odp.
+  {
+    exts: ['.docx', '.pptx', '.xlsx', '.odt', '.ods', '.odp'],
+    matches: (b) => b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07),
+  },
+  // OLE2 compound document — the pre-2007 .doc/.ppt/.xls.
+  {
+    exts: ['.doc', '.ppt', '.xls'],
+    matches: (b) => b.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])),
+  },
+  { exts: ['.jpg', '.jpeg'], matches: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  {
+    exts: ['.png'],
+    matches: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  },
+  { exts: ['.gif'], matches: (b) => /^GIF8[79]a$/.test(b.subarray(0, 6).toString('latin1')) },
+  {
+    exts: ['.webp'],
+    matches: (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+  },
+  { exts: ['.bmp'], matches: (b) => b[0] === 0x42 && b[1] === 0x4d },
+  // Plain text has no signature, so the test is the absence of anything that
+  // could not be text: a NUL byte, or bytes that are not valid UTF-8.
+  {
+    exts: ['.txt'],
+    matches: (b) => {
+      if (b.includes(0)) return false;
+      const head = b.subarray(0, 4096);
+      return Buffer.compare(Buffer.from(head.toString('utf8'), 'utf8'), head) === 0;
+    },
+  },
 ];
+
+function contentMatchesExtension(buffer: Buffer, ext: string): boolean {
+  // A legacy .doc that Word actually saved as modern XML, and vice versa, are
+  // both real things people have on disk — so any signature whose group covers
+  // this extension is enough, and an office extension is allowed to be either
+  // container. What cannot pass is bytes matching no known document format.
+  const officeExts = ['.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx', '.odt', '.ods', '.odp'];
+  const acceptable = officeExts.includes(ext) ? officeExts : [ext];
+  return CONTENT_SIGNATURES.some(
+    (sig) => sig.exts.some((e) => acceptable.includes(e)) && sig.matches(buffer),
+  );
+}
+
 
 // MongoDB treats an object value as a query operator, so a JSON body of
 // {"otp": {"$ne": null}} becomes "any OTP that is not null" and matches without
@@ -518,12 +562,24 @@ export async function registerRoutes(
 
       const safeName = sanitizeFileName(req.file.originalname);
 
-      // Validate file type - only allow printable documents
+      // What kind of file this is, decided from the bytes rather than from what
+      // the caller said about them.
+      //
+      // This used to accept the upload if *either* the extension or the
+      // Content-Type looked right. Both are supplied by the caller, so claiming
+      // "application/pdf" while sending anything at all got through — a shell
+      // script, an ELF binary, a malformed document aimed at a parser. That is
+      // not a printer problem: those bytes go on to LibreOffice, whose format
+      // parsers are a far larger attack surface than printing a PDF.
       const fileExt = path.extname(safeName).toLowerCase();
-      const fileMime = req.file.mimetype || '';
-      if (!ALLOWED_EXTENSIONS.includes(fileExt) && !ALLOWED_MIME_TYPES.includes(fileMime)) {
+      if (!ALLOWED_EXTENSIONS.includes(fileExt)) {
         return res.status(400).json({
-          message: `Unsupported file type "${fileExt}". Supported: PDF, Word, PowerPoint, Excel, Images, and plain text.`
+          message: `Unsupported file type "${fileExt}". Supported: PDF, Word, PowerPoint, Excel, Images, and plain text.`,
+        });
+      }
+      if (!contentMatchesExtension(req.file.buffer, fileExt)) {
+        return res.status(400).json({
+          message: `This file does not look like a ${fileExt} document. Please re-save it and try again.`,
         });
       }
 
