@@ -779,18 +779,18 @@ export async function registerRoutes(
       // without bound, and every file in it prints when the code is entered.
       // The setting has to mean something on the server or it does not mean
       // anything at all.
+      //
+      // Read here, enforced after the insert — see the note further down about
+      // why counting first does not survive concurrent posts.
+      let maxFilesForBatch: number | null = null;
       if (typeof providedJobId === "string" && /^\d{6}$/.test(providedJobId)) {
         const setting = await SystemSetting.findOne({ key: "maxFilesLimit" }).lean();
         const parsed = parseInt(String(setting?.value ?? ""), 10);
-        const maxFiles = Number.isFinite(parsed)
+        maxFilesForBatch = Number.isFinite(parsed)
           ? Math.min(Math.max(parsed, ALLOWED_SETTINGS.maxFilesLimit.min), ALLOWED_SETTINGS.maxFilesLimit.max)
           : 5;
-        if ((await PrintJob.countDocuments({ jobId: providedJobId })) >= maxFiles) {
-          return res.status(400).json({
-            message: `A print code can hold at most ${maxFiles} file${maxFiles === 1 ? "" : "s"}.`,
-          });
-        }
       }
+
       const teacher = await Teacher.findOne({ email: teacherEmail })
         .select("empId name email")
         .lean();
@@ -806,8 +806,48 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Copies must be between 1 and 500." });
       }
 
-      const pricePerPage = colorMode === "bw" ? 2 : 10;
-      const price = providedPrice || pageCount * copyCount * pricePerPage;
+      // copies was bounded and the rest of the job was not. pageCount went into
+      // the document exactly as sent — negative, absurd, or a string that made
+      // Mongoose throw and came back as a 500, which reads to anything scanning
+      // the API as an unhandled exception reachable from a form field.
+      const pageTotal = Math.floor(Number(pageCount));
+      if (!Number.isFinite(pageTotal) || pageTotal < 1 || pageTotal > 2000) {
+        return res.status(400).json({ message: "Page count must be between 1 and 2000." });
+      }
+
+      // Enums, checked here rather than left to the schema. An object sent where
+      // a string belongs reached Mongoose as a cast error and answered 500.
+      const mode = asString(colorMode);
+      if (mode !== "bw" && mode !== "color") {
+        return res.status(400).json({ message: "colorMode must be 'bw' or 'color'." });
+      }
+      const orient = asString(orientation) ?? "portrait";
+      if (orient !== "portrait" && orient !== "landscape") {
+        return res.status(400).json({ message: "orientation must be 'portrait' or 'landscape'." });
+      }
+      const size = asString(paperSize) ?? "a4";
+      if (size !== "a4" && size !== "a3") {
+        return res.status(400).json({ message: "paperSize must be 'a4' or 'a3'." });
+      }
+      if (duplex !== undefined && typeof duplex !== "boolean") {
+        return res.status(400).json({ message: "duplex must be true or false." });
+      }
+
+      // The Pi hands this to lp as a page range. It travels as an argv entry so
+      // there is no shell to inject into, but it was stored unchecked, which
+      // means anything at all reached the printer's option parser and appeared
+      // on the kiosk. Only 'all' or a real range list.
+      const range = (asString(pageRange) ?? "all").trim() || "all";
+      if (range !== "all" && !/^\d{1,4}(-\d{1,4})?(,\d{1,4}(-\d{1,4})?)*$/.test(range)) {
+        return res.status(400).json({ message: "Page range must be 'all' or a list like 1-4,7,9-12." });
+      }
+
+      // Priced here, always. providedPrice was used when present, so the client
+      // set its own price — including a negative one, which landed in the
+      // database as sent. Nothing bills on this today; that is not a reason to
+      // let a caller write whatever it likes into the field.
+      const pricePerPage = mode === "bw" ? 2 : 10;
+      const price = pageTotal * copyCount * pricePerPage;
 
       let jobId = providedJobId;
       if (!jobId) {
@@ -854,7 +894,31 @@ export async function registerRoutes(
           // Per-file random key (DEK), wrapped by the server-only MASTER_KEY.
           // Nothing here is derivable from any value the API ever returns.
           const envelope = encryptFileEnvelope(fileBuffer);
-          await fs.writeFile(localPath, envelope.ciphertext);
+
+          // Written to its own file, never over the original.
+          //
+          // Uploads are content-addressed, so two people uploading the same
+          // document share one file on disk. Encrypting in place therefore
+          // reached across jobs: mark one confidential and a colleague's
+          // ordinary job, pointing at the same bytes, silently became
+          // ciphertext and printed rubbish. Two confidential jobs over the same
+          // document were worse — the second encrypted the first's ciphertext,
+          // and the first's key no longer opened anything.
+          //
+          // The name is the hash of the ciphertext, so it matches what the
+          // download route accepts and, because every job gets a fresh random
+          // key, two confidential jobs over the same source never collide.
+          const cipherName = `${crypto.createHash("sha256").update(envelope.ciphertext).digest("hex")}${path.extname(localFileName)}`;
+          await fs.writeFile(path.join(UPLOADS_DIR, cipherName), envelope.ciphertext);
+          finalFilePath = `${publicBaseUrl(req)}/uploads/${cipherName}?t=${encodeURIComponent(signFileToken(cipherName))}`;
+
+          // The plaintext must not linger. Orphan cleanup would eventually take
+          // it, but "eventually" is three hours of a confidential paper sitting
+          // readable on disk. Kept only if another job still needs it — which
+          // can only be an ordinary job whose owner uploaded the same document.
+          if ((await PrintJob.countDocuments({ filePath: { $regex: localFileName } })) === 0) {
+            await fs.unlink(localPath).catch(() => {});
+          }
 
           envelopeFields = {
             encIv: envelope.encIv,
@@ -893,13 +957,13 @@ export async function registerRoutes(
         teacherEmpId: teacherEmpId || null,
         fileName: safeFileName,
         filePath: finalFilePath,
-        pageCount,
-        colorMode,
+        pageCount: pageTotal,
+        colorMode: mode,
         copies: copyCount,
-        duplex: duplex || false,
-        orientation: orientation || 'portrait',
-        paperSize: paperSize || 'a4',
-        pageRange: pageRange || 'all',
+        duplex: duplex === true,
+        orientation: orient,
+        paperSize: size,
+        pageRange: range,
         price,
         status: 'uploaded',
         confidential: confidential || false,
@@ -907,6 +971,24 @@ export async function registerRoutes(
         integrity,
         ...envelopeFields,
       });
+
+      // The count above is a check-then-act, and twelve simultaneous posts sailed
+      // straight through it — every one counted the same "under the limit" before
+      // any of them inserted, and ten landed against a limit of five.
+      //
+      // Settled after the insert instead, where it can be decided rather than
+      // predicted: rank this row among its siblings by _id, which is monotonic,
+      // so concurrent writers each get a distinct position and agree on it. Over
+      // the limit means this row is the one that loses, and it removes itself.
+      if (maxFilesForBatch !== null) {
+        const rank = await PrintJob.countDocuments({ jobId, _id: { $lte: job._id } });
+        if (rank > maxFilesForBatch) {
+          await PrintJob.deleteOne({ _id: job._id });
+          return res.status(400).json({
+            message: `A print code can hold at most ${maxFilesForBatch} file${maxFilesForBatch === 1 ? "" : "s"}.`,
+          });
+        }
+      }
 
       // Send Email OTP if teacherEmail is provided
       if (teacherEmail) {
