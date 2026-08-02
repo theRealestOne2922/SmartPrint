@@ -156,3 +156,8 @@ graphify-out/
 # Firebase deploy cache — a filename/mtime/hash manifest the CLI rewrites on
 # every deploy. Tracking it means a conflict whenever two people deploy.
 **/.firebase/
+
+# Throwaway verification scripts run against a live server.
+**/.fulltest.mjs
+**/.*-test.mjs
+**/.*-check.mjs
