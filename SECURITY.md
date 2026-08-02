@@ -180,3 +180,42 @@ clones this repo can connect to the database directly.
 The tamper-evidence above limits what that gets them — they cannot forge a job
 that prints, because `APP_SECRET` was never in that archive — but they can still
 read and destroy data. **Rotate the password and restrict Network Access.**
+
+---
+
+## Working on the right Pi
+
+There is more than one SmartPrint deployment. Over SSH the Pis are
+indistinguishable — same OS, same paths, same agent, and a Tailscale name is a
+label anyone can change. Connecting to the wrong one and "fixing" it is a
+straightforward way to break a system that was working.
+
+**Before running anything on a Pi, identify it:**
+
+```
+cd ~/smartprint-agent && node whichdeployment.mjs --expect vit
+```
+
+Exit 0 and `CONFIRMED` means proceed. Anything else means stop and change
+nothing — including `REFUSE`, a missing `.env`, and "UNKNOWN".
+
+It keys off the hash of `MASTER_KEY`, which is the one property that cannot be
+faked or accidentally shared: it is what decrypts confidential documents, so
+every machine in a deployment has it and no machine outside can. Cluster host,
+`PUBLIC_BASE_URL` and `APP_SECRET` are checked too, but only as warnings — those
+can legitimately be half-configured mid-setup.
+
+Hashes are printed, never secrets, so the output is safe to paste into a chat or
+an issue.
+
+VIT Chennai's fingerprint:
+
+| | |
+|---|---|
+| `MASTER_KEY` hash | `21bab032b8acabbf` |
+| `APP_SECRET` hash | `de60283ea11228f2` |
+| mongo cluster | `cluster0.fzbkawi.mongodb.net` |
+| `PUBLIC_BASE_URL` | `https://140.245.224.137.nip.io` |
+
+Publishing these is safe: they are truncated SHA-256 digests of 256-bit secrets,
+so they confirm a match without being reversible.
