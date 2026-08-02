@@ -250,6 +250,34 @@ export default function AdminDashboard() {
     }
   };
 
+  // Repeated failed sign-ins freeze an account for fifteen minutes. It clears
+  // itself, but "I can't log in" fifteen minutes before an exam is not a wait
+  // anyone wants, so an admin can end it here.
+  const unlockTeacher = async (teacher: any) => {
+    setApproving(teacher.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/teachers/${teacher.id}/unlock`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (res.status === 401) {
+        handleAuthFailure();
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({ title: "Failed", description: body.message || "Could not unlock the account.", variant: "destructive" });
+        return;
+      }
+      setTeachers((prev) => prev.map((t) => (t.id === teacher.id ? { ...t, locked: false } : t)));
+      toast({ title: "Account unlocked", description: `${teacher.name} can sign in again.` });
+    } catch {
+      toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
+    } finally {
+      setApproving(null);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "—";
     try {
@@ -619,14 +647,31 @@ export default function AdminDashboard() {
                       {approvedTeachers.map((t) => (
                         <div key={t.id} className="flex items-center gap-2 rounded-md border border-zinc-200 px-2.5 py-2">
                           <div className="min-w-0 flex-1">
-                            <div className="text-xs font-medium text-zinc-800 truncate">{t.name}</div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-zinc-800 truncate">{t.name}</span>
+                              {t.locked && (
+                                <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                  Locked
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-zinc-500 truncate">{t.email}</div>
                           </div>
+                          {t.locked && (
+                            <button
+                              onClick={() => unlockTeacher(t)}
+                              disabled={approving === t.id}
+                              className="text-[11px] font-semibold text-amber-600 hover:text-amber-700 transition-colors disabled:opacity-50 shrink-0"
+                              title="Too many failed sign-ins froze this account. This clears it immediately; it would otherwise clear itself within fifteen minutes."
+                            >
+                              Unlock
+                            </button>
+                          )}
                           <button
                             onClick={() => setApproval(t, false)}
                             disabled={approving === t.id}
                             className="text-[11px] font-semibold text-zinc-400 hover:text-red-600 transition-colors disabled:opacity-50 shrink-0"
-                            title="Revoke sign-in access. Their jobs and history are kept."
+                            title="Revoke sign-in access, ending any session already open. Their jobs and history are kept."
                           >
                             Revoke
                           </button>

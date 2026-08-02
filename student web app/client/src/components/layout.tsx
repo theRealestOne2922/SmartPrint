@@ -97,6 +97,10 @@ export function Layout({ children }: { children: ReactNode }) {
                       localStorage.removeItem("teacherId");
                       localStorage.removeItem("teacherName");
                       localStorage.removeItem("teacherToken");
+                      // Was left behind by sign-out, so the next person at a
+                      // shared machine still saw the previous user's address.
+                      localStorage.removeItem("teacherEmail");
+                      localStorage.removeItem("teacherEmpId");
                       setLoggedInUser(null);
                       setShowMenu(false);
                       setLocation("/");

@@ -2,6 +2,8 @@
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import type { Request, Response, NextFunction } from "express";
+import { Teacher } from "./models/Teacher";
+import { Admin } from "./models/Admin";
 
 // Release tokens (server-issued proof of a passed faculty check)
 // HMAC-signed, time-boxed, single-purpose per printId. Never derived from
@@ -75,7 +77,10 @@ export function signAdminToken(username: string): string {
   return `${exp}.${u}.${sign(`admin.${u}.${exp}`)}`;
 }
 
-export function verifyAdminToken(token: unknown): string | null {
+// Returns the identity and when the token was issued. The issue time is not a
+// separate field: exp is set to issue time plus a fixed TTL, so subtracting it
+// back out is exact, and it stays covered by the existing signature.
+export function verifyAdminToken(token: unknown): { username: string; issuedAt: number } | null {
   if (!APP_SECRET || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -83,7 +88,10 @@ export function verifyAdminToken(token: unknown): string | null {
   const exp = Number(expStr);
   if (!exp || Date.now() > exp) return null;
   if (!sigMatches(sig, sign(`admin.${u}.${exp}`))) return null;
-  return Buffer.from(u, "base64url").toString("utf8");
+  return {
+    username: Buffer.from(u, "base64url").toString("utf8"),
+    issuedAt: exp - ADMIN_TOKEN_TTL_MS,
+  };
 }
 
 // Teacher session tokens. Same construction as the admin token, different
@@ -96,7 +104,7 @@ export function signTeacherToken(email: string): string {
   return `${exp}.${e}.${sign(`teacher.${e}.${exp}`)}`;
 }
 
-export function verifyTeacherToken(token: unknown): string | null {
+export function verifyTeacherToken(token: unknown): { email: string; issuedAt: number } | null {
   if (!APP_SECRET || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -104,7 +112,29 @@ export function verifyTeacherToken(token: unknown): string | null {
   const exp = Number(expStr);
   if (!exp || Date.now() > exp) return null;
   if (!sigMatches(sig, sign(`teacher.${e}.${exp}`))) return null;
-  return Buffer.from(e, "base64url").toString("utf8");
+  return {
+    email: Buffer.from(e, "base64url").toString("utf8"),
+    issuedAt: exp - TEACHER_TOKEN_TTL_MS,
+  };
+}
+
+// A signed token proves who issued it and when, but not that the account is
+// still one we would issue to. Nothing re-read the account, so for the lifetime
+// of the token — twelve hours for staff, eight for an admin — these were all
+// true:
+//
+//   * revoking a staff account in the dashboard did nothing at all; the holder
+//     kept working until the token aged out on its own
+//   * resetting a password did not sign anyone else out, so a stolen session
+//     survived the very action taken to recover from it
+//   * deleting an account left its token working
+//
+// The account's sessionsValidFrom is set to "now" by each of those actions, and
+// any token issued before it is refused here. One indexed read per request.
+function tokenPredatesInvalidation(issuedAt: number, validFrom?: Date | null): boolean {
+  // Both sides are whole milliseconds, but a token issued in the same
+  // millisecond as the reset should still be refused — hence >=.
+  return !!validFrom && validFrom.getTime() >= issuedAt;
 }
 
 export interface AuthedRequest extends Request {
@@ -114,15 +144,46 @@ export interface AuthedRequest extends Request {
 
 // Identifies the calling teacher. The email comes from the signed token, never
 // from the request body, so a caller can only act on their own record.
-export function requireTeacher(req: Request, res: Response, next: NextFunction) {
+export async function requireTeacher(req: Request, res: Response, next: NextFunction) {
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const email = verifyTeacherToken(token);
-  if (!email) {
+  const claim = verifyTeacherToken(token);
+  if (!claim) {
     return res.status(401).json({ message: "Please sign in again." });
   }
-  (req as AuthedRequest).teacherEmail = email;
-  next();
+
+  // Express 4 does not await middleware, so a rejected promise here would be an
+  // unhandled rejection and the request would hang rather than answer. Every
+  // path out of this function has to be one we take deliberately.
+  try {
+    // Lower-cased to match how addresses are now stored. A token issued before
+    // that migration carries the original casing, and looking it up verbatim
+    // would sign those staff out for no reason.
+    const teacher = await Teacher.findOne({ email: claim.email.toLowerCase() })
+      .select("email approved sessionsValidFrom")
+      .lean();
+
+    // Deleted, revoked, or signed out everywhere since this token was issued.
+    // Same answer for all three: an account that cannot act should not learn
+    // which of those it is.
+    if (
+      !teacher ||
+      teacher.approved === false ||
+      tokenPredatesInvalidation(claim.issuedAt, teacher.sessionsValidFrom)
+    ) {
+      return res.status(401).json({ message: "Please sign in again." });
+    }
+
+    // The address as stored, not as the token spelled it, so every lookup
+    // downstream matches on exactly the same string.
+    (req as AuthedRequest).teacherEmail = teacher.email;
+    next();
+  } catch (err) {
+    // Fail closed. If we cannot confirm the account is still good, we do not
+    // get to assume it is.
+    console.error("[security] Teacher auth check failed:", err);
+    res.status(503).json({ message: "Service temporarily unavailable." });
+  }
 }
 
 // Uploaded documents were served by a bare static mount: anything in the
@@ -198,19 +259,33 @@ export function restrictAdminIp(req: Request, res: Response, next: NextFunction)
 }
 
 // Gate for endpoints that expose or destroy data across all jobs.
-export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   // Network check first: a blocked address should not even get to try a password.
   if (!adminIpAllowed(req)) {
     return res.status(403).json({ message: "Not available from this network." });
   }
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const username = verifyAdminToken(token);
-  if (!username) {
+  const claim = verifyAdminToken(token);
+  if (!claim) {
     return res.status(401).json({ message: "Admin authentication required" });
   }
-  (req as AuthedRequest).adminUsername = username;
-  next();
+
+  try {
+    const admin = await Admin.findOne({ username: claim.username })
+      .select("sessionsValidFrom")
+      .lean();
+
+    if (!admin || tokenPredatesInvalidation(claim.issuedAt, admin.sessionsValidFrom)) {
+      return res.status(401).json({ message: "Admin authentication required" });
+    }
+
+    (req as AuthedRequest).adminUsername = claim.username;
+    next();
+  } catch (err) {
+    console.error("[security] Admin auth check failed:", err);
+    res.status(503).json({ message: "Service temporarily unavailable." });
+  }
 }
 
 // Envelope encryption for confidential documents

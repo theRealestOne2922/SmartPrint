@@ -9,6 +9,21 @@ if (brevoApiKey) {
   console.warn('⚠️  BREVO_API_KEY not set — email sending disabled');
 }
 
+// Everything interpolated into the templates below is user-controlled: the
+// teacher's name comes from a registration form they filled in, the file name
+// from whatever they uploaded. Dropped into the markup raw, a name of
+// `<a href="http://…">Click here</a>` renders as a working link inside a mail
+// that genuinely arrives from smartprintvit@gmail.com and passes SPF — a
+// convincing phishing mail with the institution's own sender behind it.
+function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function sendBrevoEmail(to: string, subject: string, htmlContent: string): Promise<boolean> {
   if (!brevoApiKey) return false;
 
@@ -52,6 +67,7 @@ export async function sendOtpEmail(
     return false;
   }
 
+  // Plain text, not markup — escaping here would show "&amp;" in the subject.
   const subject = `SmartPrint — Your Print Code: ${jobId}`;
   const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #fafafa; border-radius: 16px;">
@@ -62,15 +78,15 @@ export async function sendOtpEmail(
       
       <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid #eee;">
         <p style="color: #333; font-size: 15px; margin: 0 0 16px;">
-          Hi <strong>${teacherName}</strong>,
+          Hi <strong>${esc(teacherName)}</strong>,
         </p>
         <p style="color: #333; font-size: 15px; margin: 0 0 20px;">
-          Your print job for <strong>"${fileName}"</strong> has been uploaded successfully.
+          Your print job for <strong>"${esc(fileName)}"</strong> has been uploaded successfully.
         </p>
         
         <div style="background: #FFF8E1; border: 2px solid #FFD54F; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 20px;">
           <p style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px; font-weight: 600;">Your Print Code</p>
-          <p style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #111; margin: 0;">${jobId}</p>
+          <p style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #111; margin: 0;">${esc(jobId)}</p>
         </div>
         
         <p style="color: #666; font-size: 13px; margin: 0; line-height: 1.5;">
@@ -112,7 +128,7 @@ export async function sendPasswordResetEmail(
       
       <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid #eee;">
         <p style="color: #333; font-size: 15px; margin: 0 0 16px;">
-          Hi <strong>${teacherName}</strong>,
+          Hi <strong>${esc(teacherName)}</strong>,
         </p>
         <p style="color: #333; font-size: 15px; margin: 0 0 20px;">
           We received a request to reset your password for SmartPrint.
@@ -120,7 +136,7 @@ export async function sendPasswordResetEmail(
         
         <div style="background: #FFF8E1; border: 2px solid #FFD54F; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 20px;">
           <p style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px; font-weight: 600;">Your Reset Code</p>
-          <p style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #111; margin: 0;">${otp}</p>
+          <p style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #111; margin: 0;">${esc(otp)}</p>
         </div>
         
         <p style="color: #666; font-size: 13px; margin: 0; line-height: 1.5;">

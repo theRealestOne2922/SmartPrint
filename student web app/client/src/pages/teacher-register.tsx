@@ -184,11 +184,18 @@ export default function TeacherRegister() {
                   id="password"
                   type="password"
                   required
+                  minLength={10}
                   placeholder="Create a password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
                 />
+                {/* Say the rule up front. The server enforces it either way, but
+                    being told after submitting reads as the form being broken. */}
+                <p className="text-xs text-zinc-500">
+                  At least 10 characters. A short phrase you'll remember beats a
+                  short password with symbols in it.
+                </p>
               </div>
 
               {/* Register Button */}

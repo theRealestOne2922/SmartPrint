@@ -14,6 +14,19 @@ function teacherAuthHeaders(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// The server now re-checks the account on every request, so a token can stop
+// working mid-session — an admin revoked the account, or a password reset
+// signed every session out. Holding on to a dead token just produces the same
+// error on every action; drop it and send them back to sign in.
+function handleAuthFailure(res: Response): void {
+  if (res.status !== 401) return;
+  localStorage.removeItem("teacherToken");
+  localStorage.removeItem("teacherName");
+  localStorage.removeItem("teacherEmail");
+  localStorage.removeItem("teacherEmpId");
+  window.location.href = "/teacher-login";
+}
+
 export type UploadResponse = { filePath: string; fileName: string; pageCount: number };
 export type CreateJobInput = { studentName?: string; fileName: string; filePath: string; pageCount: number; colorMode: 'bw' | 'color'; copies: number; duplex: boolean; orientation: 'portrait' | 'landscape'; paperSize: 'a4' | 'a3'; pageRange: string; jobId?: string; confidential?: boolean; teacherEmail?: string };
 export type PrintJobResponse = any;
@@ -119,6 +132,7 @@ export function useUploadFile() {
       });
 
       if (!response.ok) {
+        handleAuthFailure(response);
         let errorMsg = "Upload failed";
         try {
           const errRes = await response.json();
@@ -150,6 +164,7 @@ export async function getUniqueJobId(): Promise<string> {
     headers: teacherAuthHeaders(),
   });
   if (!res.ok) {
+    handleAuthFailure(res);
     throw new Error('Could not get a print code. Please try again.');
   }
   const { jobId } = await res.json();
@@ -194,6 +209,7 @@ export function useCreatePrintJob() {
       });
 
       if (!res.ok) {
+        handleAuthFailure(res);
         const err = await res.json();
         throw new Error(err.message || "Failed to create print job");
       }

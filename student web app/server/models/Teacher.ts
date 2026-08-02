@@ -10,6 +10,7 @@ export interface ITeacher {
   failedLoginCount?: number;
   lastFailedLoginAt?: Date | null;
   lockedUntil?: Date | null;
+  sessionsValidFrom?: Date | null;
   resetPasswordOtp?: string;
   resetPasswordExpires?: Date;
   resetPasswordAttempts?: number;
@@ -39,6 +40,11 @@ const teacherSchema = new Schema<ITeacherDocument>(
     failedLoginCount: { type: Number, default: 0 },
     lastFailedLoginAt: { type: Date, default: null },
     lockedUntil: { type: Date, default: null },
+    // Tokens issued before this moment are refused. Set when the password is
+    // reset or an admin revokes the account, which is what makes either of
+    // those actually end a session that is already open — a signed token is
+    // otherwise good for twelve hours no matter what happens to the account.
+    sessionsValidFrom: { type: Date, default: null },
 
     resetPasswordOtp: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },

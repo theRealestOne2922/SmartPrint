@@ -6,6 +6,7 @@ export interface IAdmin {
   failedLoginCount?: number;
   lastFailedLoginAt?: Date | null;
   lockedUntil?: Date | null;
+  sessionsValidFrom?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,7 +24,10 @@ const adminSchema = new Schema<IAdminDocument>(
     failedLoginCount: { type: Number, default: 0 },
     lastFailedLoginAt: { type: Date, default: null },
     lockedUntil: { type: Date, default: null },
-
+    // Tokens issued before this moment are refused. Changing the admin password
+    // sets it, so a password change ends every admin session that is already
+    // open rather than leaving them valid for the next eight hours.
+    sessionsValidFrom: { type: Date, default: null },
   },
   {
     timestamps: true,

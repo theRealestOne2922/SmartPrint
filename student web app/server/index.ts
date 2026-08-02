@@ -173,6 +173,22 @@ async function seedDefaultData() {
       console.log(`[seed] ✅ Approved ${migrated.modifiedCount} pre-existing teacher account(s).`);
     }
 
+    // Sign-in now normalises the address to lower case before looking it up, so
+    // an account stored as Bob@vit.ac.in would stop matching. Bring the stored
+    // values in line. Done one at a time and skipping collisions, because the
+    // unique index would reject a lower-case duplicate and take the whole
+    // updateMany with it — leaving some accounts migrated and some not.
+    const mixedCase = await Teacher.find({ email: /[A-Z]/ }).select("email").lean();
+    for (const t of mixedCase) {
+      const lower = t.email.toLowerCase();
+      if (await Teacher.exists({ email: lower })) {
+        console.warn(`[seed] ⚠️  Cannot lower-case "${t.email}" — "${lower}" already exists. Sign-in for the mixed-case account will fail until one is removed.`);
+        continue;
+      }
+      await Teacher.updateOne({ _id: t._id }, { $set: { email: lower } });
+      console.log(`[seed] ✅ Normalised teacher email "${t.email}" → "${lower}".`);
+    }
+
     // Seed settings if none exist
     const settingCount = await SystemSetting.countDocuments();
     if (settingCount === 0) {

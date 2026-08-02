@@ -336,6 +336,49 @@ const ALLOWED_MIME_TYPES = [
 // knowing the code. Every user-supplied value that reaches a query has to be a
 // plain string; anything else is rejected rather than coerced, because a caller
 // sending an object here is not making a typo.
+// One policy, applied everywhere a password is set. Ten characters and not one
+// of the handful everybody reaches for first; no character-class rules, because
+// they push people towards Passw0rd! and a passphrase beats it comfortably.
+const MIN_PASSWORD_LENGTH = 10;
+const BANNED_PASSWORDS = new Set([
+  "password", "password1", "password123", "12345678", "123456789", "1234567890",
+  "qwertyuiop", "admin123", "adminadmin", "letmein123", "smartprint",
+  "smartprint1", "smartprint123", "vitchennai", "vit123456", "iloveyou",
+]);
+
+function passwordTooWeak(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  }
+  if (BANNED_PASSWORDS.has(password.toLowerCase())) {
+    return "That password is too easy to guess. Please choose another.";
+  }
+  return null;
+}
+
+// Addresses are case-insensitive in practice, and treating them otherwise cuts
+// both ways: a teacher who signs up as Bob@vit.ac.in and later types
+// bob@vit.ac.in is told their credentials are invalid, and the unique index
+// happily stores both as separate accounts. Normalise once, on the way in.
+function normalizeEmail(value: unknown): string | null {
+  const email = typeof value === "string" ? value.trim().toLowerCase() : null;
+  if (!email) return null;
+  // Deliberately loose. Anything stricter starts rejecting real addresses, and
+  // the account is useless until an administrator approves it anyway.
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  return email;
+}
+
+// The only two settings the app understands, and both are small integers with
+// a sane range. Anything else is rejected on write and withheld on read.
+// Previously any key and any value was upserted, so a typo of 0 in the
+// retention box set the cleanup cutoff to "now" and deleted every job on the
+// next sweep — an accident an admin could not undo.
+const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
+  jobExpirationHours: { min: 1, max: 8760 }, // 1 hour to a year
+  maxFilesLimit: { min: 1, max: 50 },
+};
+
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -754,15 +797,21 @@ export async function registerRoutes(
   // else's jobs: confidential release checks the faculty ID on the job itself.
   app.post("/api/teacher/register", authLimiter, async (req, res) => {
     try {
-      const name = asString(req.body.name);
-      const email = asString(req.body.email);
+      const name = asString(req.body.name)?.trim();
+      const email = normalizeEmail(req.body.email);
       const password = asString(req.body.password);
-      const empId = asString(req.body.empId);
+      const empId = asString(req.body.empId)?.trim();
       if (!name || !email || !password || !empId) {
         return res.status(400).json({ message: "Name, email, password, and empId are required" });
       }
-      if (password.length < 8) {
-        return res.status(400).json({ message: "Password must be at least 8 characters." });
+      // The name is echoed back into the approval queue and into emails, and
+      // nothing bounded it — express.json's 100kb cap was the only limit.
+      if (name.length > 100) {
+        return res.status(400).json({ message: "Name is too long." });
+      }
+      const weak = passwordTooWeak(password);
+      if (weak) {
+        return res.status(400).json({ message: weak });
       }
 
       // Check if email or empId already exists
@@ -797,7 +846,7 @@ export async function registerRoutes(
 
   app.post("/api/teacher/login", authLimiter, async (req, res) => {
     try {
-      const email = asString(req.body.email);
+      const email = normalizeEmail(req.body.email);
       const password = asString(req.body.password);
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -879,7 +928,7 @@ export async function registerRoutes(
 
   app.post("/api/teacher/forgot-password", authLimiter, async (req, res) => {
     try {
-      const email = asString(req.body.email);
+      const email = normalizeEmail(req.body.email);
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
       }
@@ -923,7 +972,7 @@ export async function registerRoutes(
 
   app.post("/api/teacher/verify-reset-otp", authLimiter, async (req, res) => {
     try {
-      const email = asString(req.body.email);
+      const email = normalizeEmail(req.body.email);
       const otp = asString(req.body.otp);
       if (!email || !otp) {
         return res.status(400).json({ message: "Email and OTP are required" });
@@ -943,11 +992,19 @@ export async function registerRoutes(
 
   app.post("/api/teacher/reset-password", authLimiter, async (req, res) => {
     try {
-      const email = asString(req.body.email);
+      const email = normalizeEmail(req.body.email);
       const otp = asString(req.body.otp);
       const newPassword = asString(req.body.newPassword);
       if (!email || !otp || !newPassword) {
         return res.status(400).json({ message: "Email, OTP, and new password are required" });
+      }
+
+      // Registration enforced a minimum and this route did not, so the policy
+      // was one request away from being bypassed entirely: request a reset,
+      // set the password to a single character.
+      const weak = passwordTooWeak(newPassword);
+      if (weak) {
+        return res.status(400).json({ message: weak });
       }
 
       const teacher = await consumeOtp(email, otp);
@@ -959,7 +1016,20 @@ export async function registerRoutes(
       await Teacher.updateOne(
         { _id: teacher._id },
         {
-          $set: { password: await hashPassword(newPassword), resetPasswordAttempts: 0 },
+          $set: {
+            password: await hashPassword(newPassword),
+            resetPasswordAttempts: 0,
+            // End every session already open under the old password. Without
+            // this, resetting after a suspected compromise left the intruder
+            // signed in for up to twelve more hours — the reset locked the
+            // front door and left them inside.
+            sessionsValidFrom: new Date(),
+            // A reset is a legitimate way back in, so it should also clear a
+            // lockout rather than leaving the owner shut out of the account
+            // they just proved control of.
+            failedLoginCount: 0,
+            lockedUntil: null,
+          },
           $unset: { resetPasswordOtp: 1, resetPasswordExpires: 1 }
         }
       );
@@ -1019,10 +1089,21 @@ export async function registerRoutes(
   app.get("/api/admin/teachers", requireAdmin, async (_req, res) => {
     try {
       const teachers = await Teacher.find()
-        .select("name email empId department approved createdAt")
+        .select("name email empId department approved createdAt lockedUntil")
         .sort({ approved: 1, createdAt: -1 })
         .lean();
-      res.json(teachers.map((t) => ({ ...t, id: t._id })));
+      const now = Date.now();
+      res.json(
+        teachers.map((t) => ({
+          ...t,
+          id: t._id,
+          // Whether the account is currently frozen by repeated failed
+          // sign-ins. The dashboard had no way to see this, so an admin
+          // fielding "I can't log in" had no idea it was the cause.
+          locked: !!t.lockedUntil && t.lockedUntil.getTime() > now,
+          lockedUntil: undefined,
+        })),
+      );
     } catch (err: any) {
       console.error("Request failed:", err);
       res.status(500).json({ message: "Something went wrong. Please try again." });
@@ -1039,9 +1120,18 @@ export async function registerRoutes(
         return res.status(400).json({ message: "approved must be true or false." });
       }
 
+      // Revoking has to end the sessions that are already open, or it does
+      // nothing for up to twelve hours: the holder's token is signed and still
+      // inside its lifetime, and nothing re-read the account. Approving does
+      // not touch it — an approval should not sign anyone out.
+      const update: Record<string, unknown> = { approved: req.body.approved };
+      if (req.body.approved === false) {
+        update.sessionsValidFrom = new Date();
+      }
+
       const teacher = await Teacher.findByIdAndUpdate(
         id,
-        { $set: { approved: req.body.approved } },
+        { $set: update },
         { new: true },
       ).select("name email approved").lean();
 
@@ -1064,6 +1154,42 @@ export async function registerRoutes(
     }
   });
 
+  // Clearing a lockout. The lock expires on its own after fifteen minutes, so
+  // this is not required to recover an account — but on an exam morning fifteen
+  // minutes of a staff member not being able to sign in is its own incident,
+  // and the alternative is an admin editing the database by hand.
+  app.post("/api/admin/teachers/:id/unlock", requireAdmin, async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      if (!isObjectId(id)) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      const teacher = await Teacher.findByIdAndUpdate(
+        id,
+        { $set: { failedLoginCount: 0, lockedUntil: null } },
+        { new: true },
+      ).select("name email").lean();
+
+      if (!teacher) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      await AuditLog.create({
+        event: "teacher_unlocked",
+        printId: null,
+        ip: req.ip,
+        success: true,
+        detail: `${teacher.email} by ${(req as AuthedRequest).adminUsername}`,
+      }).catch(() => {});
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  });
+
   app.post("/api/admin/cleanup", requireAdmin, async (req, res) => {
     try {
       await cleanupExpiredJobs();
@@ -1076,9 +1202,17 @@ export async function registerRoutes(
 
   // SETTINGS — MongoDB
 
+  // Read by the print wizard (for maxFilesLimit) and the admin dashboard, so it
+  // cannot be admin-only. It returned every document in the collection though,
+  // which makes the collection itself a hazard: the day anyone stores a key, an
+  // endpoint or a credential as a "setting", it is served to the public without
+  // a line of code changing. Only the two keys the app actually understands go
+  // out, and they are both small integers.
   app.get("/api/settings", async (req, res) => {
     try {
-      const settings = await SystemSetting.find().lean();
+      const settings = await SystemSetting.find({
+        key: { $in: Object.keys(ALLOWED_SETTINGS) },
+      }).lean();
       res.json(settings.map(s => ({ ...s, id: s._id })));
     } catch (err) {
       console.error("Settings Fetch Error:", err);
@@ -1092,15 +1226,6 @@ export async function registerRoutes(
       if (!Array.isArray(settings)) {
         return res.status(400).json({ message: "settings must be an array of { key, value }" });
       }
-
-      // Only these two keys mean anything to the app, and both are numbers with
-      // a sane range. Previously any key and any value was upserted, so a typo
-      // of 0 in the retention box set the cleanup cutoff to "now" and deleted
-      // every job on the next sweep — an accident an admin could not undo.
-      const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
-        jobExpirationHours: { min: 1, max: 8760 }, // 1 hour to a year
-        maxFilesLimit: { min: 1, max: 50 },
-      };
 
       for (const setting of settings) {
         const rule = ALLOWED_SETTINGS[setting?.key];

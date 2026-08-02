@@ -37,7 +37,10 @@ if (!process.stdin.isTTY) {
 // without building the TypeScript server.
 const Admin = mongoose.model(
   'Admin',
-  new mongoose.Schema({ username: String, passwordHash: String }, { timestamps: true })
+  new mongoose.Schema(
+    { username: String, passwordHash: String, sessionsValidFrom: Date },
+    { timestamps: true }
+  )
 );
 
 function ask(question) {
@@ -121,7 +124,18 @@ if (password.length < 12) {
 
 // Same cost factor as server/security.ts hashPassword.
 const passwordHash = await bcrypt.hash(password, 12);
-await Admin.findOneAndUpdate({ username }, { username, passwordHash }, { upsert: true });
+await Admin.findOneAndUpdate(
+  { username },
+  {
+    username,
+    passwordHash,
+    // Sign out every admin session already open. You usually run this because
+    // the old password should stop working — leaving an issued token valid for
+    // another eight hours would defeat the point.
+    sessionsValidFrom: new Date(),
+  },
+  { upsert: true },
+);
 
 // Read it back and verify, so a silent failure can't look like success — which
 // is exactly what happened the first time this script was run.
