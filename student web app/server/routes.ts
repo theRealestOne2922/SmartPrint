@@ -230,6 +230,10 @@ async function clearLoginFailures(model: typeof Teacher | typeof Admin, id: any)
 // one. Nobody can be locked out by this — the real teacher can always ask for
 // another code — and it cuts an attacker to five tries per email they send.
 const OTP_MAX_ATTEMPTS = 5;
+const OTP_TTL_MS = 15 * 60 * 1000;
+// How soon a replacement code may be issued for the same account. Without this,
+// the five-guess budget resets on demand and bounds nothing.
+const OTP_REISSUE_MIN_INTERVAL_MS = 60 * 1000;
 
 // Six digits is a small space, so a plain digest would be trivially reversible
 // by trying all million. Keying the HMAC with APP_SECRET means a database on its
@@ -766,6 +770,25 @@ export async function registerRoutes(
       // ID is exactly what releases it at the kiosk. Read from the account, it
       // is a fact.
       const teacherEmail = (req as AuthedRequest).teacherEmail!;
+
+      // A batch shares one print code, and the admin sets how many files a
+      // batch may hold. That limit was only ever applied in the browser, so it
+      // stopped nobody: post the same code repeatedly and the batch grows
+      // without bound, and every file in it prints when the code is entered.
+      // The setting has to mean something on the server or it does not mean
+      // anything at all.
+      if (typeof providedJobId === "string" && /^\d{6}$/.test(providedJobId)) {
+        const setting = await SystemSetting.findOne({ key: "maxFilesLimit" }).lean();
+        const parsed = parseInt(String(setting?.value ?? ""), 10);
+        const maxFiles = Number.isFinite(parsed)
+          ? Math.min(Math.max(parsed, ALLOWED_SETTINGS.maxFilesLimit.min), ALLOWED_SETTINGS.maxFilesLimit.max)
+          : 5;
+        if ((await PrintJob.countDocuments({ jobId: providedJobId })) >= maxFiles) {
+          return res.status(400).json({
+            message: `A print code can hold at most ${maxFiles} file${maxFiles === 1 ? "" : "s"}.`,
+          });
+        }
+      }
       const teacher = await Teacher.findOne({ email: teacherEmail })
         .select("empId name email")
         .lean();
@@ -935,13 +958,30 @@ export async function registerRoutes(
         return res.status(400).json({ message: weak });
       }
 
-      // Check if email or empId already exists
-      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] });
+      // A duplicate used to answer "already exists", which made this form a
+      // lookup service: anyone could test an address, and — worse — anyone could
+      // test an Employee ID. A faculty ID is what releases a confidential exam
+      // paper at the kiosk, so handing out a way to confirm valid ones undoes
+      // the control it sits behind. Sign-in was made enumeration-safe; this
+      // route quietly gave it all back.
+      //
+      // The answer is now identical either way. A real member of staff who has
+      // already registered loses nothing: they either wait for approval or use
+      // the password reset, both of which they would do anyway.
+      const accepted = {
+        success: true,
+        message: "Account requested. An administrator will approve it before you can sign in.",
+      };
+
+      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] }).select("_id").lean();
       if (existing) {
-        return res.status(400).json({ message: "Teacher with this email or Employee ID already exists" });
+        // Spend roughly what the real path spends, so the reply time does not
+        // become the oracle the message no longer is.
+        await hashPassword(password);
+        return res.status(201).json(accepted);
       }
 
-      const teacher = await Teacher.create({
+      await Teacher.create({
         name,
         email,
         password: await hashPassword(password),
@@ -949,10 +989,7 @@ export async function registerRoutes(
         department: 'General',
       });
 
-      res.status(201).json({
-        success: true,
-        message: "Account requested. An administrator will approve it before you can sign in.",
-      });
+      res.status(201).json(accepted);
     } catch (err: any) {
       console.error("Teacher registration error:", err);
       // A field the schema rejects is the caller's mistake, not a server fault.
@@ -960,6 +997,15 @@ export async function registerRoutes(
       // API, as an unhandled exception reachable from a form field.
       if (err?.name === "ValidationError") {
         return res.status(400).json({ message: "Those details are not valid. Check the Employee ID and try again." });
+      }
+      // The unique index catching a duplicate the SELECT above missed — two
+      // requests racing for the same address. Answer exactly as the duplicate
+      // branch does, or the race becomes the oracle that branch removed.
+      if (err?.code === 11000) {
+        return res.status(201).json({
+          success: true,
+          message: "Account requested. An administrator will approve it before you can sign in.",
+        });
       }
       res.status(500).json({ message: "Internal server error" });
     }
@@ -1060,6 +1106,21 @@ export async function registerRoutes(
         return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
+      // Five wrong guesses destroy a reset code — but nothing stopped an
+      // attacker simply asking for another one. Each fresh code came with a
+      // fresh budget, so the real bound was not five guesses, it was five
+      // guesses per email they could trigger, which is to say no bound at all.
+      // It also let anyone flood a member of staff's inbox on demand.
+      //
+      // A new code is issued at most once a minute per account. The reply is
+      // unchanged either way, so this reveals nothing about who exists.
+      if (
+        teacher.resetPasswordExpires &&
+        teacher.resetPasswordExpires.getTime() - OTP_TTL_MS > Date.now() - OTP_REISSUE_MIN_INTERVAL_MS
+      ) {
+        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+      }
+
       // Generate 6-digit OTP
       const otp = crypto.randomInt(100000, 1000000).toString();
       
@@ -1073,7 +1134,7 @@ export async function registerRoutes(
             // should not be handed a working password reset for every account
             // with one outstanding.
             resetPasswordOtp: hashOtp(otp),
-            resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
+            resetPasswordExpires: new Date(Date.now() + OTP_TTL_MS),
             // A fresh code gets a fresh budget.
             resetPasswordAttempts: 0,
           },
