@@ -203,11 +203,11 @@ pm2 restart smartprint-agent
 
 3. **Mixed Content:** The frontend at `smartprintvit.web.app` (HTTPS) calls the backend at `https://140.245.224.137.nip.io` (also HTTPS via Let's Encrypt). This MUST stay HTTPS or browsers will block the requests.
 
-4. **Rate Limiting:** The `/api/upload` endpoint has a rate limit of 5 uploads per hour per IP.
+4. **Rate Limiting:** Uploads are capped per address (200/hour), but the limits that matter are keyed to the resource rather than the caller — faculty-ID attempts per job, reset-code guesses per code, failed sign-ins per account. Campus wifi puts everyone behind one address, so per-address limits throttle a department while barely inconveniencing an attacker with several addresses. See `SECURITY.md`.
 
 5. **Automated Cleanup:** A background scheduler runs every hour and deletes print jobs + their files older than the configured retention period (default 24h). This is configured in the admin panel via `jobExpirationHours`.
 
-6. **Default Admin Login:** Username: `vit admin`, Password: `admin123`. This is seeded automatically on first run.
+6. **Admin Login:** There is no default password. On first run, if no admin exists, one is created from `ADMIN_USERNAME` / `ADMIN_PASSWORD`; leave either blank and a random password is generated and printed to the log once. Change it afterwards from the dashboard (minimum 12 characters), which also signs out every other admin session.
 
 7. **WebSockets:** The backend broadcasts job status changes over WebSocket so the Student status page and Kiosk UI update in real-time without polling.
 
@@ -279,7 +279,7 @@ As requested, the website must only work on the VIT Network (cannot be accessed 
 ### 3. Database Migration
 - Deploy a MongoDB instance within the VTOP intranet.
 - Update the `MONGODB_URI` across all apps. Mongoose schemas will automatically initialize the required collections (`printjobs`, `admins`, `teachers`, `systemsettings`) on the first run.
-- The server will automatically seed the default admin (`vit admin` / `admin123`) on startup.
+- Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` before first start, or the server generates a random admin password and prints it once. There is no default credential to inherit.
 
 ### 4. Build and Run
 ```bash
