@@ -33,7 +33,7 @@ SmartPrint is a **college print management system** built for VIT. Students uplo
 - **SSL Domain:** `140.245.224.137.nip.io` (nip.io maps to the IP automatically)
 
 ### MongoDB Atlas
-- **Connection String:** `mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint`
+- **Connection String:** `<MONGODB_URI — see the deployment .env, never committed>`
 - **Database Name:** `smartprint`
 - **Collections:** `printjobs`, `admins`, `teachers`, `systemsettings`
 
@@ -132,7 +132,7 @@ Student Phone                 Oracle VM                    Raspberry Pi
 
 ### `student web app/.env` (local dev + Oracle VM)
 ```
-MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+MONGODB_URI=<MONGODB_URI — see the deployment .env, never committed>
 MASTER_KEY=<64 hex chars>
 APP_SECRET=<64 hex chars>
 BREVO_API_KEY=<optional, for password-reset OTP email>
@@ -151,14 +151,14 @@ PORT=5000
 
 ### `kiosk ui/.env`
 ```
-MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+MONGODB_URI=<MONGODB_URI — see the deployment .env, never committed>
 APP_SECRET=<same value as the student web app>
 PORT=5001
 ```
 
 ### `pi-print-agent/.env`
 ```
-MONGODB_URI=mongodb+srv://smartprintvit_admin:7Stqvs7w3swGSw2R@cluster0.fzbkawi.mongodb.net/smartprint?retryWrites=true&w=majority&appName=Cluster0
+MONGODB_URI=<MONGODB_URI — see the deployment .env, never committed>
 MASTER_KEY=<same value as the student web app>
 CLEANUP_HOURS=24
 ```
@@ -221,7 +221,7 @@ pm2 restart smartprint-agent
 
 ## Security Summary
 - All traffic encrypted via TLS/SSL (Let's Encrypt certificate on Oracle VM)
-- MongoDB Atlas uses `mongodb+srv://` (TLS enforced)
+- MongoDB Atlas uses `<MONGODB_URI — see the deployment .env, never committed>` (TLS enforced)
 - No credentials exposed to the browser
 - Client-side document decryption (passwords never sent to server)
 - Rate-limited uploads (5/hour/IP)
