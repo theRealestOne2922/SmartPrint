@@ -1,10 +1,11 @@
 # Raspberry Pi — Remote Access (Tailscale) and Agent Updates
 
 The print agent runs on a Raspberry Pi wired to the printer, usually sitting on
-the campus network behind NAT. This covers two things:
+the campus network behind NAT. This covers:
 
 1. Setting up **Tailscale** once, so the Pi can be reached from anywhere.
-2. Updating the agent afterwards, from anywhere.
+2. Confirming which of the two Pis you are actually connected to.
+3. Updating the agent afterwards, from anywhere.
 
 > **Part 1 must be done with access to the Pi** — on campus over SSH, or with a
 > keyboard and monitor attached. You cannot set up remote access remotely.
@@ -59,7 +60,7 @@ sudo tailscale up --ssh --hostname=vit-print-pi --reset
 
 > A name is a label, and labels can be wrong. Before running anything that
 > changes a Pi, confirm which deployment it actually belongs to — see
-> **Part 3**. The name gets you to the right machine; the fingerprint proves it.
+> **Part 2**. The name gets you to the right machine; the fingerprint proves it.
 
 ### 1.4 Note the Pi's Tailscale address
 
@@ -109,7 +110,55 @@ that "on the tailnet" currently means "can SSH to both printers".
 
 ---
 
-## Part 2 — Updating the print agent
+## Part 2 — Confirm which Pi you are on, before changing anything
+
+Two Pis, two colleges, identical operating systems, identical paths, identical
+agent. Over SSH they are indistinguishable, and a Tailscale name is a label
+someone can set to anything.
+
+**Run this first, every time, before any change:**
+
+```bash
+cd ~/smartprint-agent && node whichdeployment.mjs --expect <hash>
+```
+
+- `CONFIRMED` and exit 0 — proceed.
+- Anything else — stop. Change nothing. That includes `REFUSE`, a missing
+  `.env`, and no expected hash supplied.
+
+It compares the hash of `MASTER_KEY`, which is the one thing that cannot be
+faked or shared between deployments: it decrypts confidential documents, so
+every machine in one install has it and no machine in another can.
+
+Run it with no `--expect` on a machine you know is correct to learn that
+deployment's hash. Keep the value in `pi-print-agent/.deployment-expect`
+(gitignored) or your password manager — **not** in the repository, which is
+public. Only hashes are printed, never secrets, so the output is safe to paste
+into a chat.
+
+---
+
+## Environment variables the agent needs
+
+```
+MONGODB_URI=      # same database as the backend
+MASTER_KEY=       # byte-identical to the backend, or confidential jobs will not decrypt
+PUBLIC_BASE_URL=  # e.g. https://140.245.224.137.nip.io
+APP_SECRET=       # byte-identical to the backend
+CLEANUP_HOURS=24
+```
+
+`PUBLIC_BASE_URL` and `APP_SECRET` are newer than most installs and are what
+stop a job written directly into the database from pointing this agent —
+which sits inside the campus network — at a URL of someone else's choosing.
+See `SECURITY.md`. Left unset, the agent still refuses private and loopback
+addresses and warns loudly at startup; it will not stop printing over them.
+
+---
+
+---
+
+## Part 3 — Updating the print agent
 
 ### 2.1 Find out how the agent is installed
 
@@ -180,7 +229,7 @@ pm2 restart <process-name> && pm2 save
 
 ---
 
-## Part 3 — Verify
+## Part 4 — Verify
 
 First, the self-check. It needs no database, no printer and no network off the
 Pi, and it fails loudly if the files are broken or half-updated:
@@ -211,52 +260,6 @@ otherwise looks healthy:
 Logs alone are not proof. Send one real **confidential** job end-to-end and
 confirm paper comes out. That is the only thing that proves the Pi's
 `MASTER_KEY` matches the backend's.
-
----
-
-## Part 3 — Confirm which Pi you are on, before changing anything
-
-Two Pis, two colleges, identical operating systems, identical paths, identical
-agent. Over SSH they are indistinguishable, and a Tailscale name is a label
-someone can set to anything.
-
-**Run this first, every time, before any change:**
-
-```bash
-cd ~/smartprint-agent && node whichdeployment.mjs --expect <hash>
-```
-
-- `CONFIRMED` and exit 0 — proceed.
-- Anything else — stop. Change nothing. That includes `REFUSE`, a missing
-  `.env`, and no expected hash supplied.
-
-It compares the hash of `MASTER_KEY`, which is the one thing that cannot be
-faked or shared between deployments: it decrypts confidential documents, so
-every machine in one install has it and no machine in another can.
-
-Run it with no `--expect` on a machine you know is correct to learn that
-deployment's hash. Keep the value in `pi-print-agent/.deployment-expect`
-(gitignored) or your password manager — **not** in the repository, which is
-public. Only hashes are printed, never secrets, so the output is safe to paste
-into a chat.
-
----
-
-## Environment variables the agent needs
-
-```
-MONGODB_URI=      # same database as the backend
-MASTER_KEY=       # byte-identical to the backend, or confidential jobs will not decrypt
-PUBLIC_BASE_URL=  # e.g. https://140.245.224.137.nip.io
-APP_SECRET=       # byte-identical to the backend
-CLEANUP_HOURS=24
-```
-
-`PUBLIC_BASE_URL` and `APP_SECRET` are newer than most installs and are what
-stop a job written directly into the database from pointing this agent —
-which sits inside the campus network — at a URL of someone else's choosing.
-See `SECURITY.md`. Left unset, the agent still refuses private and loopback
-addresses and warns loudly at startup; it will not stop printing over them.
 
 ---
 
