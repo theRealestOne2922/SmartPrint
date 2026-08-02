@@ -175,7 +175,11 @@ console.log('\n--- download source restriction ---');
 // ------------------------------------------------------- job tamper-evidence
 console.log('\n--- job integrity ---');
 {
-  const secret = 'test-app-secret';
+  // Sign with whatever secret the agent itself is using, so the real check can
+  // be exercised. Hardcoding one here passed only where APP_SECRET happened to
+  // be unset — on a configured machine the real function used a different key
+  // and disagreed, which looked like an agent fault and was a test fault.
+  const secret = process.env.APP_SECRET || 'test-app-secret';
   const sign = (job) => crypto.createHmac('sha256', secret).update(`integrity.${JSON.stringify([
     'v1', String(job.jobId ?? ''), String(job.teacherEmpId ?? ''),
     job.confidential === true ? 1 : 0, String(job.fileName ?? ''), String(job.filePath ?? ''),
@@ -200,7 +204,18 @@ console.log('\n--- job integrity ---');
   check('swapping the file name breaks it', !verify({ ...signed, fileName: 'other.pdf' }));
   check('a missing signature is not a pass', !verify({ ...base }));
   check('a guessed signature is not a pass', !verify({ ...base, integrity: 'f'.repeat(64) }));
-  check('the real check agrees on an untouched job', jobIntegrityMatches(signed) === true);
+  // The real function, not the local re-implementation. With APP_SECRET set it
+  // must accept a correctly signed job and refuse a forged one; with it unset
+  // it deliberately fails open, warning at startup rather than refusing to
+  // print because one variable was missed.
+  if (process.env.APP_SECRET) {
+    check('the real check accepts a correctly signed job', jobIntegrityMatches(signed) === true);
+    check('the real check refuses a forged signature',
+      jobIntegrityMatches({ ...base, integrity: 'f'.repeat(64) }) === false);
+  } else {
+    check('APP_SECRET unset: the real check fails open, by design',
+      jobIntegrityMatches({ ...base }) === true);
+  }
 }
 
 // --------------------------------------------------------- booklet imposition
