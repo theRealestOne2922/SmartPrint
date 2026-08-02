@@ -1427,6 +1427,15 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Unknown status." });
       }
 
+      // Editing and deleting a job already required proof the print code had
+      // been entered at a kiosk; changing its status did not, so the code on
+      // its own was enough to cancel a colleague's job or mark it completed so
+      // that it never printed. The kiosk holds this token from the lookup it
+      // must do first, so nothing legitimate notices.
+      if (!verifyJobSession(printId, req.headers["x-job-session"])) {
+        return res.status(403).json({ message: "Enter the print code before changing this job." });
+      }
+
       // Confidential jobs can only move to 'printing' with a valid,
       // server-issued release token (proof the faculty check passed).
       if (status === "printing") {

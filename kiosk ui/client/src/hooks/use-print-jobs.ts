@@ -122,7 +122,10 @@ export function useUpdatePrintJobStatus() {
       // Update via Express API (was: supabase.from('print_jobs').update({ status }).eq('job_id', printId))
       const res = await fetch(`${API_BASE}/api/jobs/${printId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        // Same session token the edit and delete calls send. Without it the
+        // print code alone was enough to cancel someone's job, or mark it
+        // completed so it never printed, from anywhere.
+        headers: { 'Content-Type': 'application/json', ...sessionHeader(printId) },
         body: JSON.stringify({ status, releaseToken }),
       });
 

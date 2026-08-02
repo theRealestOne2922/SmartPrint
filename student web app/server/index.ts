@@ -255,6 +255,16 @@ async function seedDefaultData() {
     return res.status(status).json({ message });
   });
 
+  // Anything under /api that reached this far matched no route, and the SPA
+  // catch-all below would answer it with the index page — 200, text/html, for
+  // /api/.env and every other path a scanner tries. Nothing was disclosed, but
+  // "200 to literally everything" is indistinguishable from a hit when you are
+  // reading a scan, and a mistyped path in a client reads as JSON.parse
+  // choking on "<!DOCTYPE" rather than as a 404.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ message: "Not found" });
+  });
+
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
