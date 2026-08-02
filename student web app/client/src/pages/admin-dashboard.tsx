@@ -63,6 +63,7 @@ export default function AdminDashboard() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
   const [approving, setApproving] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -256,6 +257,38 @@ export default function AdminDashboard() {
       toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
     } finally {
       setApproving(null);
+    }
+  };
+
+  // Clear a confidential job locked by repeated wrong Faculty IDs. The bound
+  // stops guessing, but it also means someone who read the code off a screen
+  // can strand that paper for the day — this is the way back.
+  const unlockJob = async (printId: string) => {
+    setUnlocking(printId);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/jobs/${printId}/unlock`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (res.status === 401) {
+        handleAuthFailure();
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({ title: "Failed", description: body.message || "Could not unlock the job.", variant: "destructive" });
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      setJobs((prev) => prev.map((j) => (j.jobId === printId ? { ...j, locked: false } : j)));
+      toast({
+        title: "Job unlocked",
+        description: `Code ${printId} can be verified again (${body.clearedAttempts ?? 0} failed attempts cleared).`,
+      });
+    } catch {
+      toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
+    } finally {
+      setUnlocking(null);
     }
   };
 
@@ -527,6 +560,26 @@ export default function AdminDashboard() {
                                     <div className="text-xs text-zinc-400 mt-0.5 font-mono">
                                       Code {job.jobId || "—"}
                                     </div>
+                                    {/* Too many wrong Faculty IDs will lock a
+                                        confidential job for the day. That is
+                                        deliberate against guessing, but it also
+                                        means anyone who saw the code can strand
+                                        the paper — so it has to be clearable. */}
+                                    {job.locked && (
+                                      <div className="mt-1.5 flex items-center gap-1.5">
+                                        <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">
+                                          Locked
+                                        </span>
+                                        <button
+                                          onClick={() => unlockJob(job.jobId)}
+                                          disabled={unlocking === job.jobId}
+                                          className="text-[10px] font-semibold text-red-600 hover:text-red-700 underline disabled:opacity-50"
+                                          title="Too many incorrect Faculty IDs locked this job. Clearing lets the owner verify and print again."
+                                        >
+                                          {unlocking === job.jobId ? "Unlocking…" : "Unlock"}
+                                        </button>
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-4 py-3 max-w-[220px]">
                                     <div className="flex items-center gap-2">

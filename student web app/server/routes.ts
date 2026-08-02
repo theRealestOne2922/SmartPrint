@@ -267,6 +267,17 @@ async function consumeOtp(email: string, otp: string) {
 
 // Bounds guessing against a single job regardless of how many addresses are
 // used. See the comment at the verification route.
+//
+// This cuts both ways and the second edge is worth stating plainly: someone who
+// reads a print code off a screen can spend ten wrong faculty IDs and put that
+// job beyond use for the rest of the day — the legitimate owner included. That
+// is a cheap denial of service aimed at one exam paper on the morning it is
+// needed, which is precisely when it hurts.
+//
+// Keeping the bound and giving an administrator a way to clear it is better
+// than loosening it: brute force stays bounded, and a job locked out of malice
+// is a one-click fix at the print desk rather than a lost morning. See
+// POST /api/admin/jobs/:printId/unlock.
 const FACULTY_ATTEMPT_LIMIT = 10;
 const FACULTY_LOCKOUT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -673,7 +684,29 @@ export async function registerRoutes(
   app.get("/api/print-jobs", requireAdmin, async (req, res) => {
     try {
       const jobs = await PrintJob.find().sort({ createdAt: -1 }).lean();
-      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id })));
+
+      // Which confidential jobs are currently locked out by wrong faculty IDs.
+      // One grouped count rather than a query per job — and only for the codes
+      // on this page, so it stays bounded as the collection grows.
+      const codes = jobs.filter((j) => j.confidential).map((j) => j.jobId);
+      const lockedCodes = new Set<string>();
+      if (codes.length) {
+        const grouped = await AuditLog.aggregate([
+          {
+            $match: {
+              event: "confidential_verify",
+              success: false,
+              printId: { $in: codes },
+              createdAt: { $gt: new Date(Date.now() - FACULTY_LOCKOUT_WINDOW_MS) },
+            },
+          },
+          { $group: { _id: "$printId", failures: { $sum: 1 } } },
+          { $match: { failures: { $gte: FACULTY_ATTEMPT_LIMIT } } },
+        ]);
+        for (const g of grouped) lockedCodes.add(String(g._id));
+      }
+
+      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id, locked: lockedCodes.has(j.jobId) })));
     } catch (err: any) {
       console.error("List print jobs error:", err);
       res.status(500).json({ error: "Internal Server Error" });
@@ -1310,6 +1343,50 @@ export async function registerRoutes(
       }).catch(() => {});
 
       res.json({ success: true });
+    } catch (err: any) {
+      console.error("Request failed:", err);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  });
+
+  // Clear a job locked by repeated wrong faculty IDs.
+  //
+  // Both bounds have to go: the audit rows the 24-hour lockout counts, and the
+  // 15-minute limiter's bucket for this job. Clearing one and not the other
+  // leaves the job still refusing and looks like the button did nothing.
+  app.post("/api/admin/jobs/:printId/unlock", requireAdmin, async (req, res) => {
+    try {
+      const printId = String(req.params.printId);
+      if (!/^\d{6}$/.test(printId)) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+      const exists = await PrintJob.exists({ jobId: printId });
+      if (!exists) {
+        return res.status(404).json({ message: "Print job not found" });
+      }
+
+      const cleared = await AuditLog.deleteMany({
+        event: "confidential_verify",
+        printId,
+        success: false,
+      });
+      // express-rate-limit exposes resetKey on the middleware; the key here has
+      // to match verifyFacultyLimiter's keyGenerator exactly.
+      try {
+        (verifyFacultyLimiter as any).resetKey?.(`verify:${printId}`);
+      } catch {
+        /* store may not support reset; the audit-row clear is the important half */
+      }
+
+      await AuditLog.create({
+        event: "job_unlocked",
+        printId,
+        ip: req.ip,
+        success: true,
+        detail: `by ${(req as AuthedRequest).adminUsername}`,
+      }).catch(() => {});
+
+      res.json({ success: true, clearedAttempts: cleared.deletedCount });
     } catch (err: any) {
       console.error("Request failed:", err);
       res.status(500).json({ message: "Something went wrong. Please try again." });
