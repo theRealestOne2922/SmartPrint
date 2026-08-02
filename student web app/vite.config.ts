@@ -8,8 +8,12 @@ export default defineConfig({
   plugins: [
     react(),
     runtimeErrorOverlay(),
+    // 'crypto' is deliberately absent. Polyfilling it pulled crypto-browserify
+    // and its elliptic/browserify-sign dependencies into the browser bundle —
+    // a stack of advisories shipped to every visitor for code nothing calls.
+    // pdf-lib and JSZip need Buffer and stream; neither needs node crypto.
     nodePolyfills({
-      include: ['buffer', 'crypto', 'stream', 'util', 'process', 'path'],
+      include: ['buffer', 'stream', 'util', 'process', 'path'],
       globals: { Buffer: true, process: true },
     }),
     ...(process.env.NODE_ENV !== "production" &&
