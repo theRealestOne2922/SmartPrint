@@ -340,15 +340,18 @@ const ALLOWED_MIME_TYPES = [
 // of the handful everybody reaches for first; no character-class rules, because
 // they push people towards Passw0rd! and a passphrase beats it comfortably.
 const MIN_PASSWORD_LENGTH = 10;
+// The admin account sees every job in the system and can revoke any member of
+// staff, so it carries a longer minimum than a teacher account does.
+const MIN_ADMIN_PASSWORD_LENGTH = 12;
 const BANNED_PASSWORDS = new Set([
   "password", "password1", "password123", "12345678", "123456789", "1234567890",
   "qwertyuiop", "admin123", "adminadmin", "letmein123", "smartprint",
   "smartprint1", "smartprint123", "vitchennai", "vit123456", "iloveyou",
 ]);
 
-function passwordTooWeak(password: string): string | null {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+function passwordTooWeak(password: string, minLength = MIN_PASSWORD_LENGTH): string | null {
+  if (password.length < minLength) {
+    return `Password must be at least ${minLength} characters.`;
   }
   if (BANNED_PASSWORDS.has(password.toLowerCase())) {
     return "That password is too easy to guess. Please choose another.";
@@ -1037,6 +1040,73 @@ export async function registerRoutes(
       res.json({ success: true, message: "Password has been reset successfully" });
     } catch (err: any) {
       console.error("Reset password error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Changing the admin password from the dashboard, so it does not need an SSH
+  // session and a script every time.
+  //
+  // The current password is required even though the caller already holds a
+  // valid admin token. That is the whole point: an unattended dashboard, or a
+  // token lifted from a browser, should not be enough to lock the real admin
+  // out of their own system by changing the password out from under them.
+  app.post("/api/admin/change-password", requireAdmin, authLimiter, async (req, res) => {
+    try {
+      const currentPassword = asString(req.body.currentPassword);
+      const newPassword = asString(req.body.newPassword);
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ message: "Current and new password are required." });
+      }
+
+      const weak = passwordTooWeak(newPassword, MIN_ADMIN_PASSWORD_LENGTH);
+      if (weak) {
+        return res.status(400).json({ message: weak });
+      }
+      if (currentPassword === newPassword) {
+        return res.status(400).json({ message: "The new password must be different." });
+      }
+
+      const username = (req as AuthedRequest).adminUsername!;
+      const admin = await Admin.findOne({ username });
+      if (!admin) {
+        return res.status(401).json({ message: "Admin authentication required" });
+      }
+
+      const { ok } = await verifyPassword(currentPassword, admin.passwordHash);
+      if (!ok) {
+        await recordLoginFailure(Admin, admin);
+        await AuditLog.create({
+          event: "admin_password_change", printId: null, ip: req.ip,
+          success: false, detail: `${username} — wrong current password`,
+        }).catch(() => {});
+        return res.status(401).json({ message: "That is not your current password." });
+      }
+
+      // Sign every other admin session out. The replacement token below is
+      // stamped one millisecond later so this session, the one doing the
+      // changing, is the single one that survives.
+      const stamp = new Date();
+      await Admin.updateOne(
+        { _id: admin._id },
+        {
+          $set: {
+            passwordHash: await hashPassword(newPassword),
+            sessionsValidFrom: stamp,
+            failedLoginCount: 0,
+            lockedUntil: null,
+          },
+        },
+      );
+
+      await AuditLog.create({
+        event: "admin_password_change", printId: null, ip: req.ip,
+        success: true, detail: username,
+      }).catch(() => {});
+
+      res.json({ success: true, token: signAdminToken(username, stamp.getTime() + 1) });
+    } catch (err: any) {
+      console.error("Admin password change error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });

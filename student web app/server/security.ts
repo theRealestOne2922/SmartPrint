@@ -71,8 +71,13 @@ export function verifyJobSession(printId: string, token: unknown): boolean {
 // the signature; base64url never contains "." so the split stays unambiguous.
 const ADMIN_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 
-export function signAdminToken(username: string): string {
-  const exp = Date.now() + ADMIN_TOKEN_TTL_MS;
+// issuedAt is overridable for one case: changing your own password stamps
+// sessionsValidFrom to sign every other session out, and the replacement token
+// has to be provably newer than that stamp. Both are millisecond values, so
+// leaving it to Date.now() can land on the same millisecond and lock the admin
+// out of the session they are sitting in.
+export function signAdminToken(username: string, issuedAt = Date.now()): string {
+  const exp = issuedAt + ADMIN_TOKEN_TTL_MS;
   const u = Buffer.from(username, "utf8").toString("base64url");
   return `${exp}.${u}.${sign(`admin.${u}.${exp}`)}`;
 }

@@ -94,6 +94,7 @@ export function Layout({ children }: { children: ReactNode }) {
                       e.preventDefault();
                       localStorage.removeItem("adminAuth");
                       localStorage.removeItem("adminToken");
+                      localStorage.removeItem("adminUsername");
                       localStorage.removeItem("teacherId");
                       localStorage.removeItem("teacherName");
                       localStorage.removeItem("teacherToken");

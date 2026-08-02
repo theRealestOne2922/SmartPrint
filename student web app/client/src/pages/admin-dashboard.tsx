@@ -72,6 +72,14 @@ export default function AdminDashboard() {
   const [maxFilesLimit, setMaxFilesLimit] = useState("5");
   const [savingSettings, setSavingSettings] = useState(false);
 
+  // Password change
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const adminUsername = localStorage.getItem("adminUsername") || "admin";
+
   // Admin endpoints are gated server-side; this header is what actually
   // authorises the request. The localStorage flag only drives the UI.
   const authHeaders = (): HeadersInit => {
@@ -84,6 +92,7 @@ export default function AdminDashboard() {
   const handleAuthFailure = () => {
     localStorage.removeItem("adminAuth");
     localStorage.removeItem("adminToken");
+    localStorage.removeItem("adminUsername");
     toast({
       title: "Session expired",
       description: "Please sign in again.",
@@ -250,6 +259,48 @@ export default function AdminDashboard() {
     }
   };
 
+  // Change the admin password without an SSH session and a script.
+  //
+  // The server signs every other admin session out and hands back a replacement
+  // token for this one, so whoever is sitting here stays signed in and anyone
+  // else holding a token does not.
+  const changePassword = async () => {
+    setPasswordError("");
+    if (newPassword !== confirmPassword) {
+      setPasswordError("The two new passwords do not match.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/change-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        // A 401 here means the current password was wrong, not that the session
+        // died — so this must not fall through to the sign-out handler.
+        setPasswordError(body.message || "Could not change the password.");
+        return;
+      }
+
+      if (body.token) localStorage.setItem("adminToken", body.token);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      toast({
+        title: "Password changed",
+        description: "Any other signed-in admin session has been signed out.",
+      });
+    } catch {
+      setPasswordError("Could not reach the server.");
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   // Repeated failed sign-ins freeze an account for fifteen minutes. It clears
   // itself, but "I can't log in" fifteen minutes before an exam is not a wait
   // anyone wants, so an admin can end it here.
@@ -293,6 +344,7 @@ export default function AdminDashboard() {
   const handleLogout = () => {
     localStorage.removeItem("adminAuth");
     localStorage.removeItem("adminToken");
+    localStorage.removeItem("adminUsername");
     setLocation("/admin-login");
   };
 
@@ -745,6 +797,63 @@ export default function AdminDashboard() {
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
                   Saving also runs a cleanup pass, so files already past the new
                   retention window are removed immediately.
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Admin password */}
+            <Card className="bg-white border-zinc-200 shadow-soft">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-zinc-950 text-base">
+                  <Lock className="w-4 h-4 text-primary" />
+                  Admin Password
+                </CardTitle>
+                <CardDescription className="text-zinc-500 text-xs">
+                  Signed in as <span className="font-medium text-zinc-700">{adminUsername}</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="Current password"
+                  value={currentPassword}
+                  onChange={(e) => { setCurrentPassword(e.target.value); setPasswordError(""); }}
+                  className="bg-white border-zinc-200 text-zinc-950 focus-visible:ring-primary/50 focus-visible:border-primary/50"
+                />
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  placeholder="New password"
+                  value={newPassword}
+                  onChange={(e) => { setNewPassword(e.target.value); setPasswordError(""); }}
+                  className="bg-white border-zinc-200 text-zinc-950 focus-visible:ring-primary/50 focus-visible:border-primary/50"
+                />
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Confirm new password"
+                  value={confirmPassword}
+                  onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(""); }}
+                  className="bg-white border-zinc-200 text-zinc-950 focus-visible:ring-primary/50 focus-visible:border-primary/50"
+                />
+
+                {passwordError && (
+                  <p className="text-xs text-red-600 leading-relaxed">{passwordError}</p>
+                )}
+
+                <button
+                  onClick={changePassword}
+                  disabled={changingPassword || !currentPassword || !newPassword || !confirmPassword}
+                  className="w-full py-2.5 px-4 rounded-lg font-semibold text-sm bg-zinc-900 text-white hover:bg-zinc-800 active:bg-zinc-950 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {changingPassword ? "Changing…" : "Change Password"}
+                </button>
+
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  At least 12 characters. Changing it signs out every other admin
+                  session; you stay signed in here.
                 </p>
               </CardContent>
             </Card>

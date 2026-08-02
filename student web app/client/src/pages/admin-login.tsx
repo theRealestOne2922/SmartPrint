@@ -65,9 +65,13 @@ export default function AdminLogin() {
         return;
       }
 
-      const { token } = await res.json();
+      const { token, username: signedInAs } = await res.json();
       localStorage.setItem("adminAuth", "true");
       localStorage.setItem("adminToken", token);
+      // Display only — the dashboard shows who is signed in. Every request is
+      // authorised by the token, and the server reads the identity out of that,
+      // so editing this in devtools changes nothing but the label.
+      if (signedInAs) localStorage.setItem("adminUsername", signedInAs);
       toast({
         title: "Welcome back!",
         description: "Redirecting to admin dashboard…",
