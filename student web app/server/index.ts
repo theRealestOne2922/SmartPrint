@@ -110,13 +110,28 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        // Never let auth tokens or key material reach the log file.
-        const REDACT = ["token", "wrappedKey", "wrappedKeyIv", "wrappedKeyAuthTag", "encIv", "encAuthTag"];
-        const safe = JSON.stringify(capturedJsonResponse, (key, value) =>
-          REDACT.includes(key) ? "[redacted]" : value,
-        );
-        logLine += ` :: ${safe}`;
+
+      // Only the explanatory message on a failure, never the body of a
+      // successful response.
+      //
+      // This used to log every response body with a handful of fields blanked
+      // out — token, wrappedKey, the encryption parameters. A deny list is the
+      // wrong shape for this, and it failed exactly the way deny lists do: it
+      // covered what someone thought of and nothing else. What actually
+      // accumulated in a world-readable file, on a host with a second user
+      // account, was 16 faculty IDs, 16 staff addresses, 111 print codes and 68
+      // document names.
+      //
+      // A faculty ID and a print code together are what release a confidential
+      // exam paper at the kiosk. The log was quietly assembling both halves.
+      //
+      // Nothing debuggable is lost: method, path, status and duration still go
+      // out on every request, and a failure still explains itself.
+      if (res.statusCode >= 400 && capturedJsonResponse) {
+        const message = (capturedJsonResponse as any)?.message;
+        if (typeof message === "string") {
+          logLine += ` :: ${message.slice(0, 200)}`;
+        }
       }
 
       log(logLine);
