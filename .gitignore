@@ -161,3 +161,7 @@ graphify-out/
 **/.fulltest.mjs
 **/.*-test.mjs
 **/.*-check.mjs
+
+# The expected deployment fingerprint is per-install, not per-repo.
+# See SECURITY.md, "Working on the right Pi".
+pi-print-agent/.deployment-expect

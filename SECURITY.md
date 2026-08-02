@@ -193,29 +193,25 @@ straightforward way to break a system that was working.
 **Before running anything on a Pi, identify it:**
 
 ```
-cd ~/smartprint-agent && node whichdeployment.mjs --expect vit
+cd ~/smartprint-agent && node whichdeployment.mjs --expect <hash>
 ```
 
 Exit 0 and `CONFIRMED` means proceed. Anything else means stop and change
-nothing — including `REFUSE`, a missing `.env`, and "UNKNOWN".
+nothing — including `REFUSE`, a missing `.env`, and no expected hash given.
 
 It keys off the hash of `MASTER_KEY`, which is the one property that cannot be
 faked or accidentally shared: it is what decrypts confidential documents, so
-every machine in a deployment has it and no machine outside can. Cluster host,
-`PUBLIC_BASE_URL` and `APP_SECRET` are checked too, but only as warnings — those
-can legitimately be half-configured mid-setup.
+every machine in a deployment has it and no machine outside can. Hashes are
+printed, never secrets, so the output is safe to paste into a chat or an issue.
 
-Hashes are printed, never secrets, so the output is safe to paste into a chat or
-an issue.
+**The expected hash is not stored in this repository, and must not be.** Put it
+in `pi-print-agent/.deployment-expect` (gitignored), pass it with `--expect`, or
+set `DEPLOYMENT_EXPECT`. Run the script with no argument on a known-good machine
+to learn the value.
 
-VIT Chennai's fingerprint:
-
-| | |
-|---|---|
-| `MASTER_KEY` hash | `21bab032b8acabbf` |
-| `APP_SECRET` hash | `de60283ea11228f2` |
-| mongo cluster | `cluster0.fzbkawi.mongodb.net` |
-| `PUBLIC_BASE_URL` | `https://140.245.224.137.nip.io` |
-
-Publishing these is safe: they are truncated SHA-256 digests of 256-bit secrets,
-so they confirm a match without being reversible.
+A committed hash would let anyone holding a candidate key confirm it against the
+real one offline, and it is exactly the shape a secret scanner flags — an
+earlier version of this file did hardcode the values, and GitGuardian caught it
+within minutes. The digests are truncated SHA-256 of 256-bit secrets so nothing
+was recoverable, but there was no reason to publish them and they stayed in the
+history regardless.
