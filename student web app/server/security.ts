@@ -293,6 +293,59 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
   }
 }
 
+// Tamper-evidence for the fields that decide who may print a confidential job.
+//
+// Every control in this system trusts the job document. Whoever owns the print
+// code proves themselves against job.teacherEmpId, and the release follows from
+// that. So write access to the database is not merely "read the data" — it is
+// the ability to set teacherEmpId to a value you already know, walk to the
+// kiosk, and have the Pi decrypt and print the paper for you. None of the
+// tokens, limits or encryption notice, because all of them believe the record.
+//
+// That is not hypothetical here: the production connection string was committed
+// to a public repository inside env-files-backup.zip, and git history keeps a
+// deleted file forever. Until that credential is rotated, anyone who clones the
+// repo can write to this database.
+//
+// APP_SECRET was never in that archive. Signing the security-relevant fields
+// with it means a row edited outside the application no longer verifies, and a
+// confidential job that does not verify is not released. Someone with full
+// database write access still cannot forge one without the server's secret.
+//
+// Only fields that never legitimately change after creation are covered — the
+// kiosk may still adjust copies, colour, paper size and the rest.
+const INTEGRITY_VERSION = "v1";
+
+function integrityPayload(job: {
+  jobId?: unknown;
+  teacherEmpId?: unknown;
+  confidential?: unknown;
+  fileName?: unknown;
+  filePath?: unknown;
+}): string {
+  // JSON of a fixed-order array: unambiguous, so no combination of field values
+  // can be rearranged into the same string as a different combination.
+  return JSON.stringify([
+    INTEGRITY_VERSION,
+    String(job.jobId ?? ""),
+    String(job.teacherEmpId ?? ""),
+    job.confidential === true ? 1 : 0,
+    String(job.fileName ?? ""),
+    String(job.filePath ?? ""),
+  ]);
+}
+
+export function signJobIntegrity(job: Parameters<typeof integrityPayload>[0]): string {
+  return sign(`integrity.${integrityPayload(job)}`);
+}
+
+export function verifyJobIntegrity(job: Parameters<typeof integrityPayload>[0] & { integrity?: unknown }): boolean {
+  if (!APP_SECRET) return false;
+  const stored = job.integrity;
+  if (typeof stored !== "string" || stored.length === 0) return false;
+  return sigMatches(stored, signJobIntegrity(job));
+}
+
 // Envelope encryption for confidential documents
 // Per-file random DEK (AES-256-GCM) wrapped by a server-only MASTER_KEY.
 // The wrapped key never leaves the server and is never derivable from any
@@ -380,6 +433,9 @@ const SENSITIVE_JOB_FIELDS = [
   // database rather than the API.
   "filePath",
   "teacherEmpId",
+  // The tamper-evidence tag. Not secret, but nothing on any client needs it and
+  // handing it out invites offline fiddling.
+  "integrity",
   "encIv",
   "encAuthTag",
   "wrappedKey",

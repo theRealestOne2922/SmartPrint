@@ -33,6 +33,8 @@ import {
   sanitizeJob,
   signFileToken,
   verifyFileToken,
+  signJobIntegrity,
+  verifyJobIntegrity,
 } from "./security";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
@@ -873,6 +875,18 @@ export async function registerRoutes(
       // body, so a caller can set it to anything without going through /upload.
       const safeFileName = sanitizeFileName(fileName);
 
+      // Signed over the fields that decide who may print this: the print code,
+      // the faculty ID that releases it, whether it is confidential, and the
+      // document it points at. Edited anywhere but here, the tag stops matching
+      // and a confidential job stops being releasable.
+      const integrity = signJobIntegrity({
+        jobId,
+        teacherEmpId: teacherEmpId || null,
+        confidential: confidential || false,
+        fileName: safeFileName,
+        filePath: finalFilePath,
+      });
+
       const job = await PrintJob.create({
         jobId,
         studentName: studentName || "Student",
@@ -890,6 +904,7 @@ export async function registerRoutes(
         status: 'uploaded',
         confidential: confidential || false,
         encrypted,
+        integrity,
         ...envelopeFields,
       });
 
@@ -1602,8 +1617,26 @@ export async function registerRoutes(
       }
 
       const job = await PrintJob.findOne({ jobId: printId, confidential: true })
-        .select("teacherEmpId")
+        .select("jobId teacherEmpId confidential fileName filePath integrity")
         .lean();
+
+      // The faculty ID being checked here comes out of the job document, so it
+      // is only worth checking if the document is the one we wrote. Someone with
+      // direct database access could otherwise set teacherEmpId to a value they
+      // already know and walk through this check legitimately.
+      if (job && !verifyJobIntegrity(job)) {
+        await AuditLog.create({
+          event: "job_integrity_failure",
+          printId,
+          ip: req.ip,
+          success: false,
+          detail: "verify-faculty on a job whose record does not match its signature",
+        }).catch(() => {});
+        console.error(`[security] Job ${printId} failed its integrity check — record altered outside the application.`);
+        return res.status(409).json({
+          message: "This job cannot be verified. Please ask the print desk to re-issue it.",
+        });
+      }
 
       const match = !!job && typeof job.teacherEmpId === "string" &&
         job.teacherEmpId.trim().toLowerCase() === facultyId.trim().toLowerCase();
@@ -1732,6 +1765,28 @@ export async function registerRoutes(
       // Confidential jobs can only move to 'printing' with a valid,
       // server-issued release token (proof the faculty check passed).
       if (status === "printing") {
+        // Nothing goes to the printer on a record we cannot vouch for. This
+        // covers the case the release token cannot: a token is proof the
+        // faculty check passed, not proof the job it passed against is the one
+        // we created.
+        const toPrint = await PrintJob.find({ jobId: printId })
+          .select("jobId teacherEmpId confidential fileName filePath integrity")
+          .lean();
+        const altered = toPrint.filter((j) => !verifyJobIntegrity(j));
+        if (altered.length > 0) {
+          await AuditLog.create({
+            event: "job_integrity_failure",
+            printId,
+            ip: req.ip,
+            success: false,
+            detail: `release blocked — ${altered.length} of ${toPrint.length} record(s) do not match their signature`,
+          }).catch(() => {});
+          console.error(`[security] Refusing to print ${printId}: ${altered.length} record(s) altered outside the application.`);
+          return res.status(409).json({
+            message: "This job cannot be printed. Please ask the print desk to re-issue it.",
+          });
+        }
+
         const hasConfidential = await PrintJob.exists({ jobId: printId, confidential: true });
         if (hasConfidential && !verifyReleaseToken(printId, releaseToken)) {
           await AuditLog.create({

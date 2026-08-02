@@ -16,6 +16,7 @@ export interface IPrintJob {
   price: number;
   status: string;
   confidential: boolean;
+  integrity?: string | null;
   encrypted: boolean;
   encIv: string | null;
   encAuthTag: string | null;
@@ -50,6 +51,9 @@ const printJobSchema = new Schema<IPrintJobDocument>(
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
     confidential: { type: Boolean, default: false },
+    // HMAC over the fields that decide who may print this job, so a row
+    // edited straight in the database stops verifying. See signJobIntegrity.
+    integrity: { type: String, default: null },
     encrypted: { type: Boolean, default: false },
     encIv: { type: String, default: null },
     encAuthTag: { type: String, default: null },
