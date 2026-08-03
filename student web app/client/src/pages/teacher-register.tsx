@@ -162,6 +162,12 @@ export default function TeacherRegister() {
                   onChange={(e) => setEmail(e.target.value)}
                   className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
                 />
+                {/* Said up front. The server enforces it regardless, but being
+                    told only after filling the whole form in reads as the page
+                    being broken. */}
+                <p className="text-xs text-zinc-500">
+                  Must be your institute address ending in <span className="font-medium">@vit.ac.in</span>.
+                </p>
               </div>
 
               {/* Emp ID */}

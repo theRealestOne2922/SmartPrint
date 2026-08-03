@@ -439,6 +439,26 @@ function normalizeEmail(value: unknown): string | null {
   return email;
 }
 
+// Who may request a new staff account.
+//
+// Applied at registration only, never at sign-in. The accounts that predate
+// this rule are on other domains and are in daily use; enforcing it at sign-in
+// would lock every one of them out.
+//
+// Subdomains count, so chennai.vit.ac.in works. Matched on the domain after the
+// last "@" — "vit.ac.in@evil.com" is not a VIT address, and a naive endsWith
+// on the whole string would accept it.
+const ALLOWED_SIGNUP_DOMAINS = (process.env.ALLOWED_SIGNUP_DOMAINS || "vit.ac.in")
+  .split(",")
+  .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
+  .filter(Boolean);
+
+function signupDomainAllowed(email: string): boolean {
+  if (ALLOWED_SIGNUP_DOMAINS.length === 0) return true;
+  const domain = email.slice(email.lastIndexOf("@") + 1);
+  return ALLOWED_SIGNUP_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
+
 // The only two settings the app understands, and both are small integers with
 // a sane range. Anything else is rejected on write and withheld on read.
 // Previously any key and any value was upserted, so a typo of 0 in the
@@ -1044,6 +1064,15 @@ export async function registerRoutes(
       const empId = asString(req.body.empId)?.trim();
       if (!name || !email || !password || !empId) {
         return res.status(400).json({ message: "Name, email, password, and empId are required" });
+      }
+      // Rejected before anything is created. This reveals nothing about who
+      // already has an account — it is a property of the address typed in — so
+      // it does not reopen the enumeration hole the identical-response
+      // handling below closes.
+      if (!signupDomainAllowed(email)) {
+        return res.status(400).json({
+          message: `Use your institute email address (@${ALLOWED_SIGNUP_DOMAINS[0]}).`,
+        });
       }
       // The name is echoed back into the approval queue and into emails, and
       // nothing bounded it — express.json's 100kb cap was the only limit.
