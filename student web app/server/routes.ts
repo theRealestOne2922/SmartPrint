@@ -476,6 +476,26 @@ function signupDomainAllowed(email: string): boolean {
   return ALLOWED_SIGNUP_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`));
 }
 
+// A short, explicit list of accounts outside ALLOWED_SIGNUP_DOMAINS that are
+// allowed to exist at all — the two admin accounts, added by hand rather than
+// through registration (which the domain check already refuses them). Password
+// reset needs the same exception, or the two admins would be the one thing
+// this system cannot recover on its own: locked out with no self-serve path,
+// needing a database edit every time, forever.
+//
+// This does not widen who can create an account or sign in — both of those
+// gates are untouched. It only decides who may request a reset code by email.
+const RESET_DOMAIN_EXCEPTIONS = new Set(
+  (process.env.RESET_DOMAIN_EXCEPTIONS || "agilan.a2005@gmail.com,kishoregokul808@gmail.com")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+function passwordResetAllowedFor(email: string): boolean {
+  return signupDomainAllowed(email) || RESET_DOMAIN_EXCEPTIONS.has(email);
+}
+
 // The only two settings the app understands, and both are small integers with
 // a sane range. Anything else is rejected on write and withheld on read.
 // Previously any key and any value was upserted, so a typo of 0 in the
@@ -1392,6 +1412,14 @@ export async function registerRoutes(
       const email = normalizeEmail(req.body.email);
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
+      }
+
+      // Same response either way as the "not found" branch just below — a
+      // distinct answer here would tell a caller which domains are allowed
+      // faster than reading it out of this file, and would do so by touching
+      // no database at all, which is a very cheap oracle to hand out.
+      if (!passwordResetAllowedFor(email)) {
+        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
       const teacher = await Teacher.findOne({ email });
