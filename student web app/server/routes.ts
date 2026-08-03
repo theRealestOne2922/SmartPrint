@@ -312,6 +312,23 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Each new account guarantees one OTP email, and authLimiter's
+// skipSuccessfulRequests means a 201 is invisible to it — nothing bounded how
+// many distinct accounts, and therefore how many emails, one address could
+// trigger. The free-tier send quota is not the only reason that matters: an
+// address that does not exist still counts against the quota, so this is also
+// the thing standing between one script and every real signup for the day
+// getting refused because the quota is gone. Counts every attempt, successes
+// included. Six an hour is generous for someone onboarding a department and
+// tight enough to bound abuse.
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 6,
+  message: { message: "Too many accounts created from this network. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Issuing a print code is cheap but must not become an oracle for probing
 // which codes exist, so every request counts here.
 const codeLimiter = rateLimit({
@@ -1068,7 +1085,7 @@ export async function registerRoutes(
   // in bulk. It still needs to be self-service, so it is rate limited rather
   // than gated. Note that a self-registered account gives no access to anyone
   // else's jobs: confidential release checks the faculty ID on the job itself.
-  app.post("/api/teacher/register", authLimiter, async (req, res) => {
+  app.post("/api/teacher/register", registerLimiter, async (req, res) => {
     try {
       const name = asString(req.body.name)?.trim();
       const email = normalizeEmail(req.body.email);
