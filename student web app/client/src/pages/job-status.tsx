@@ -162,7 +162,11 @@ export default function JobStatus() {
             </div>
             <div>
               <p className="font-semibold">2. Enter Code & Print</p>
-              <p className="text-sm text-muted-foreground">Enter {jobId} on the screen to release the print.</p>
+              <p className="text-sm text-muted-foreground">
+                {teacherEmail
+                  ? "Enter the code from your email on the screen to release the print."
+                  : `Enter ${jobId} on the screen to release the print.`}
+              </p>
             </div>
           </div>
         </div>

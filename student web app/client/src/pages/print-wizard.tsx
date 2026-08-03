@@ -648,17 +648,24 @@ export default function PrintWizard() {
         createdJobs.push(data);
       }
 
-      // Add one recent print entry for the batch
-      const summaryName = fileDetailsList.length === 1 
-        ? fileDetailsList[0].fileName 
-        : `${fileDetailsList.length} files batch`;
-        
-      newRecentPrints.push({ jobId: batchJobId, fileName: summaryName, timestamp: Date.now() });
+      // Recent Prints is a convenience for walk-in students who may lose their
+      // code. A confidential job must never land here: this list is written to
+      // localStorage, so it survives the browser closing, and it renders both
+      // the code and the file name on screen. For a confidential job that is
+      // the whole secret sitting in plain text on a shared staff machine —
+      // exactly what sending the code by email instead of showing it is meant
+      // to prevent.
+      if (!confidential) {
+        const summaryName = fileDetailsList.length === 1
+          ? fileDetailsList[0].fileName
+          : `${fileDetailsList.length} files batch`;
 
-      // Save to recent prints
-      const updated = [...newRecentPrints, ...recentPrints].slice(0, 5);
-      setRecentPrints(updated);
-      try { localStorage.setItem('smartprint_recent_jobs', JSON.stringify(updated)); } catch (e) { /* ignore */ }
+        newRecentPrints.push({ jobId: batchJobId, fileName: summaryName, timestamp: Date.now() });
+
+        const updated = [...newRecentPrints, ...recentPrints].slice(0, 5);
+        setRecentPrints(updated);
+        try { localStorage.setItem('smartprint_recent_jobs', JSON.stringify(updated)); } catch (e) { /* ignore */ }
+      }
 
       setIsBatchSubmitting(false);
       // Navigate to unified status page
