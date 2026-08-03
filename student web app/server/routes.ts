@@ -761,7 +761,19 @@ export async function registerRoutes(
         for (const g of grouped) lockedCodes.add(String(g._id));
       }
 
-      res.json(jobs.map(j => sanitizeJob({ ...j, id: j._id, locked: lockedCodes.has(j.jobId) })));
+      // The admin dashboard tracks who printed, how much, and when — never
+      // what. fileName was leaking here even for confidential jobs: sanitizeJob
+      // strips the download path and encryption fields, but nothing stripped
+      // the title itself, so "CAT2-Physics-QP.pdf" was visible to anyone with
+      // admin access. That is exactly the fact the confidential flow exists to
+      // protect. Dropped unconditionally — not only when confidential — because
+      // an ordinary document's name can be just as identifying, and the admin
+      // role has no legitimate need to know it either way.
+      res.json(jobs.map(j => {
+        const clean = sanitizeJob({ ...j, id: j._id, locked: lockedCodes.has(j.jobId) });
+        delete (clean as any).fileName;
+        return clean;
+      }));
     } catch (err: any) {
       console.error("List print jobs error:", err);
       res.status(500).json({ error: "Internal Server Error" });

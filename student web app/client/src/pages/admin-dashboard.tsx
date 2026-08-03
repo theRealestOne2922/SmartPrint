@@ -390,9 +390,10 @@ export default function AdminDashboard() {
   // releases a confidential job at the kiosk, so the server strips it from every
   // response. Searching a field the dashboard can never receive would just look
   // broken.
+  // fileName is not in this list: the server no longer sends one to the admin
+  // dashboard, for any job. Searchable on who printed and the code only.
   const filteredJobs = jobs.filter(
     (job) =>
-      job.fileName?.toLowerCase().includes(search.toLowerCase()) ||
       job.studentName?.toLowerCase().includes(search.toLowerCase()) ||
       job.jobId?.includes(search)
   );
@@ -591,16 +592,13 @@ export default function AdminDashboard() {
                                           <TooltipContent>Confidential — encrypted, released only with the Faculty ID</TooltipContent>
                                         </Tooltip>
                                       )}
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <span className="truncate block font-mono text-xs text-zinc-700 cursor-help">
-                                            {job.fileName}
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent className="max-w-xs font-mono text-[10px] break-all">
-                                          {job.fileName}
-                                        </TooltipContent>
-                                      </Tooltip>
+                                      {/* The server no longer sends a file name here, for any
+                                          job, confidential or not — this dashboard tracks who
+                                          printed and how much, never what. See the comment on
+                                          GET /api/print-jobs. */}
+                                      <span className="truncate block font-mono text-xs text-zinc-400 italic">
+                                        Document
+                                      </span>
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-zinc-700 tabular-nums">
@@ -623,7 +621,6 @@ export default function AdminDashboard() {
                               const batch = item.jobs!;
                               const firstJob = batch[0];
                               const totalPages = batch.reduce((sum: number, j: any) => sum + (j.pageCount || 0), 0);
-                              const fileNames = batch.map((j: any) => j.fileName).join("\n");
                               const colorModes = Array.from(new Set(batch.map((j: any) => j.colorMode || "—")));
                               const displayColor = colorModes.length === 1
                                 ? (colorModes[0] === "bw" ? "B&W" : colorModes[0])
@@ -648,19 +645,14 @@ export default function AdminDashboard() {
                                       {anyConfidential && (
                                         <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                                       )}
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <div className="flex items-center gap-2 cursor-help">
-                                            <Layers className="w-4 h-4 text-primary shrink-0" />
-                                            <span className="font-semibold text-xs text-zinc-700">
-                                              Batch of {batch.length} files
-                                            </span>
-                                          </div>
-                                        </TooltipTrigger>
-                                        <TooltipContent className="whitespace-pre-wrap max-w-sm font-mono text-[10px] bg-zinc-900 text-white p-2">
-                                          {fileNames}
-                                        </TooltipContent>
-                                      </Tooltip>
+                                      {/* No per-file tooltip — that was the file names. Same
+                                          reason as the single-job row above. */}
+                                      <div className="flex items-center gap-2">
+                                        <Layers className="w-4 h-4 text-primary shrink-0" />
+                                        <span className="font-semibold text-xs text-zinc-700">
+                                          Batch of {batch.length} files
+                                        </span>
+                                      </div>
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-zinc-700 font-semibold tabular-nums">
