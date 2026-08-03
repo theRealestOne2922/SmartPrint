@@ -1157,7 +1157,8 @@ export async function registerRoutes(
       if (err?.code === 11000) {
         return res.status(201).json({
           success: true,
-          message: "Account requested. An administrator will approve it before you can sign in.",
+          needsVerification: true,
+          message: "Check that inbox for a 6-digit code to confirm the address is yours.",
         });
       }
       res.status(500).json({ message: "Internal server error" });
@@ -1200,13 +1201,19 @@ export async function registerRoutes(
         return res.status(400).json(generic);
       }
 
+      // Confirming the code also approves the account. That is only sound
+      // because ALLOWED_SIGNUP_DOMAINS is staff-only at VIT — proving mailbox
+      // ownership on that domain proves staff identity, which is what the
+      // manual approval step existed to establish. If a domain here is ever
+      // shared with students, this stops being true and approval needs to go
+      // back to a human. See SECURITY.md.
       await Teacher.updateOne({ _id: teacher._id }, {
-        $set: { emailVerified: true, emailOtpAttempts: 0 },
+        $set: { emailVerified: true, emailOtpAttempts: 0, approved: true },
         $unset: { emailOtp: 1, emailOtpExpires: 1 },
       });
       res.json({
         success: true,
-        message: "Address confirmed. An administrator will approve the account before you can sign in.",
+        message: "Address confirmed — you can sign in now.",
       });
     } catch (err: any) {
       console.error("Verify email error:", err);

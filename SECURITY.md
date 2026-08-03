@@ -22,9 +22,21 @@ insufficient for anything that matters.
 
 ## Identity
 
-**Staff accounts need an administrator to approve them.** Registration is
-self-service; being able to sign in is not. Anyone can request an account, and
-until an admin approves it in the dashboard, sign-in is refused.
+**A new account needs its email confirmed before it can sign in.** Registering
+sends a 6-digit code to the address given; entering it correctly both confirms
+the address and approves the account in one step. This is deliberately sound
+only because `ALLOWED_SIGNUP_DOMAINS` (`vit.ac.in`) is a **staff-only domain at
+VIT** — proving mailbox ownership there is proving staff identity, which is
+what manual approval used to establish by hand.
+
+If that domain is ever shared with students, or a second domain is added that
+is not staff-only, this stops holding and approval has to move back to a human
+gate — flip `Teacher.create`'s auto-approve off in `POST
+/api/teacher/verify-email` and require an admin click again.
+
+An administrator can still revoke access at any time from the dashboard —
+that remains the only way an account goes from approved back to not, and it
+ends any session already open.
 
 **Registration reveals nothing.** A duplicate address or Employee ID gets exactly
 the same answer as a new one, and spends the same time producing it. This matters

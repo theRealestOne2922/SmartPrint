@@ -37,7 +37,7 @@ export default function TeacherRegister() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "That code is not valid.");
-      toast({ title: "Address confirmed", description: data.message || "An administrator will approve your account." });
+      toast({ title: "Address confirmed", description: data.message || "You can sign in now." });
       setLocation("/teacher-login");
     } catch (err: any) {
       toast({ title: "Could not confirm", description: err.message, variant: "destructive" });
@@ -202,8 +202,8 @@ export default function TeacherRegister() {
                   <span className="text-zinc-400">Expires in 15 minutes</span>
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Confirming proves the address is yours. An administrator still has to
-                  approve the account before you can sign in.
+                  Confirming proves the address is yours — your account is ready to
+                  sign in as soon as this succeeds.
                 </p>
               </form>
             ) : (

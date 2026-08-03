@@ -31,11 +31,14 @@ const teacherSchema = new Schema<ITeacherDocument>(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     department: { type: String, default: null },
-    // Registration is self-service but not self-authorising. Anyone could sign
-    // themselves up as staff, and a staff account is what creates confidential
-    // jobs — so an account exists as soon as it is requested, and can do nothing
-    // until an admin approves it. Accounts that predate this are approved by the
-    // startup migration; nobody currently working gets locked out.
+    // Registration is self-service but not self-authorising. False until the
+    // owner confirms their email OTP, at which point the verify-email route
+    // sets it true directly — see the comment there for why that is sound only
+    // because ALLOWED_SIGNUP_DOMAINS is staff-only. An admin can still flip
+    // this false at any time from the dashboard to revoke access; that remains
+    // the only way an account goes from approved back to not. Accounts that
+    // predate any of this are approved by the startup migration; nobody
+    // currently working gets locked out.
     approved: { type: Boolean, default: false },
     // Proof the person registering can read mail at the address they gave.
     // Domain alone is not identity: anyone could type principal@vit.ac.in, and
