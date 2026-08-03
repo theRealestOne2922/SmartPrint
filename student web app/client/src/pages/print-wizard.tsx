@@ -232,6 +232,11 @@ export default function PrintWizard() {
 
   const [maxFiles, setMaxFiles] = useState(5);
   const [confidential, setConfidential] = useState(false);
+  // Admin-controlled kill switch, pending SDC's decision. Defaults true so the
+  // toggle stays visible until the setting actually loads and says otherwise —
+  // matching the server's own default, so there is no flash of the option
+  // appearing and then disappearing on a slow connection.
+  const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
   const [showVolumeWarning, setShowVolumeWarning] = useState(false);
   const [totalCalculatedCopies, setTotalCalculatedCopies] = useState(0);
 
@@ -262,6 +267,13 @@ export default function PrintWizard() {
           const limit = parseInt(maxFilesSetting.value, 10);
           if (!isNaN(limit)) setMaxFiles(limit);
         }
+        // Missing row means "true" — the server treats it the same way, and a
+        // fresh deployment or a database that predates this setting must not
+        // silently hide a working feature.
+        const confSetting = settings.find((s: any) => s.key === "confidentialPrintingEnabled");
+        const enabled = confSetting?.value !== "false";
+        setConfidentialPrintingEnabled(enabled);
+        if (!enabled) setConfidential(false);
       } catch (e) {
         console.error("Failed to load max files limit:", e);
       }
@@ -1159,7 +1171,14 @@ export default function PrintWizard() {
                     </div>
                   </div>
 
-                  {isTeacher && (
+                  {/* Hidden entirely, not disabled — an admin has turned this
+                      off pending a decision above their own authority, and
+                      leaving a disabled control visible would just invite a
+                      "why can't I click this" support question. The server
+                      enforces the same switch independently; this is not the
+                      only thing standing between a request and a confidential
+                      job. */}
+                  {isTeacher && confidentialPrintingEnabled && (
                     <div className="mt-8 border-t border-border pt-8">
                       <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>

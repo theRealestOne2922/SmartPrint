@@ -93,6 +93,19 @@ reaches the printer. Editing those fields directly in the database — setting
 `teacherEmpId` to a value you know, flipping `confidential` off, repointing
 `filePath` — stops the job verifying. A missing signature fails closed.
 
+**Whether new jobs may use any of this is an admin-controlled setting**,
+`confidentialPrintingEnabled`, toggled from the dashboard — added so the
+department can turn the option off pending a policy decision without anyone
+touching code. Turning it off does not remove or weaken anything above: it
+only blocks new jobs from being created with `confidential: true`. Existing
+confidential jobs are unaffected in either direction, and every one of the
+protections on this page — encryption, the release gate, the lockout, the
+tamper-evidence — stays fully built and enforced regardless of the setting.
+Enforced server-side in the job-creation route itself, not only by hiding the
+toggle in the wizard, so a request sent directly to the API cannot bypass it.
+Defaults to enabled everywhere it is read, so a database that predates this
+setting behaves exactly as it did before this shipped.
+
 ---
 
 ## Documents

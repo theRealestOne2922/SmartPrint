@@ -225,6 +225,16 @@ async function seedDefaultData() {
       ]);
       console.log('[seed] ✅ Created default settings');
     }
+
+    // New setting on an existing deployment: only create it if missing, and
+    // default to enabled so this shipping does not change today's behavior on
+    // the running system. Idempotent — after the first boot this matches
+    // nothing and does not run again.
+    const confidentialSetting = await SystemSetting.findOne({ key: 'confidentialPrintingEnabled' });
+    if (!confidentialSetting) {
+      await SystemSetting.create({ key: 'confidentialPrintingEnabled', value: 'true' });
+      console.log('[seed] ✅ confidentialPrintingEnabled defaulted to true — no change to current behavior.');
+    }
   } catch (err: any) {
     console.error('[seed] Error seeding default data:', err.message);
   }

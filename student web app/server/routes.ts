@@ -486,6 +486,23 @@ const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
   maxFilesLimit: { min: 1, max: 50 },
 };
 
+// A single administrator-controlled switch for the confidential/faculty-ID
+// system as a whole, pending a decision above the admin's own authority (here,
+// the department). Nothing about encryption, the release gate, or the lockout
+// is touched by this — they stay fully implemented either way. This only
+// decides whether a NEW job is allowed to use them. Existing confidential jobs
+// are unaffected by flipping it, in either direction.
+//
+// Defaults to enabled wherever it is read, so a database that predates this
+// setting — including production right now — behaves exactly as it did
+// before this shipped, with nothing to configure.
+const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled"]);
+
+async function confidentialPrintingEnabled(): Promise<boolean> {
+  const row = await SystemSetting.findOne({ key: "confidentialPrintingEnabled" }).lean();
+  return row?.value !== "false";
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -928,6 +945,14 @@ export async function registerRoutes(
       // A confidential job is never created unencrypted; if encryption fails
       // the upload is rejected instead of silently storing plaintext.
       if (confidential) {
+        // The admin's kill switch. Checked here, not only by hiding the toggle
+        // in the wizard — a client can still send confidential:true directly to
+        // this endpoint, and a UI that hides a button is not access control.
+        if (!(await confidentialPrintingEnabled())) {
+          return res.status(400).json({
+            message: "Confidential printing is currently turned off by the administrator.",
+          });
+        }
         if (!teacherEmpId) {
           return res.status(400).json({ message: "A Faculty ID is required for confidential jobs." });
         }
@@ -1776,7 +1801,7 @@ export async function registerRoutes(
   app.get("/api/settings", async (req, res) => {
     try {
       const settings = await SystemSetting.find({
-        key: { $in: Object.keys(ALLOWED_SETTINGS) },
+        key: { $in: [...Object.keys(ALLOWED_SETTINGS), ...Array.from(ALLOWED_BOOLEAN_SETTINGS)] },
       }).lean();
       res.json(settings.map(s => ({ ...s, id: s._id })));
     } catch (err) {
@@ -1793,6 +1818,18 @@ export async function registerRoutes(
       }
 
       for (const setting of settings) {
+        if (ALLOWED_BOOLEAN_SETTINGS.has(setting?.key)) {
+          if (typeof setting.value !== "boolean") {
+            return res.status(400).json({ message: `${setting.key} must be true or false.` });
+          }
+          await SystemSetting.findOneAndUpdate(
+            { key: setting.key },
+            { key: setting.key, value: String(setting.value) },
+            { upsert: true, new: true }
+          );
+          continue;
+        }
+
         const rule = ALLOWED_SETTINGS[setting?.key];
         if (!rule) {
           return res.status(400).json({ message: `Unknown setting "${setting?.key}".` });
