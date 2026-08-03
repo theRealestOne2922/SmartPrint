@@ -1096,7 +1096,8 @@ export async function registerRoutes(
       // the password reset, both of which they would do anyway.
       const accepted = {
         success: true,
-        message: "Account requested. An administrator will approve it before you can sign in.",
+        needsVerification: true,
+        message: "Check that inbox for a 6-digit code to confirm the address is yours.",
       };
 
       const existing = await Teacher.findOne({ $or: [{ email }, { empId }] }).select("_id").lean();
@@ -1107,13 +1108,27 @@ export async function registerRoutes(
         return res.status(201).json(accepted);
       }
 
+      // Belonging to the right domain is not the same as owning the address.
+      // Anyone could type principal@vit.ac.in, and an administrator looking at
+      // a plausible VIT address has no way to tell. The code proves the person
+      // registering can read mail there; approval remains a separate gate.
+      const otp = crypto.randomInt(100000, 1000000).toString();
       await Teacher.create({
         name,
         email,
         password: await hashPassword(password),
         empId,
         department: 'General',
+        emailVerified: false,
+        emailOtp: hashOtp(otp),
+        emailOtpExpires: new Date(Date.now() + OTP_TTL_MS),
+        emailOtpAttempts: 0,
       });
+
+      const { sendVerificationEmail } = await import('./emailService');
+      sendVerificationEmail(email, name, otp).catch((e) =>
+        console.error("Verification email failed:", e?.message),
+      );
 
       res.status(201).json(accepted);
     } catch (err: any) {
@@ -1133,6 +1148,92 @@ export async function registerRoutes(
           message: "Account requested. An administrator will approve it before you can sign in.",
         });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Confirm the address is real. Same bounds as the reset code: five wrong
+  // guesses destroy it, and a replacement cannot be minted on demand.
+  app.post("/api/teacher/verify-email", authLimiter, async (req, res) => {
+    try {
+      const email = normalizeEmail(req.body.email);
+      const otp = asString(req.body.otp);
+      if (!email || !otp) {
+        return res.status(400).json({ message: "Email and code are required" });
+      }
+
+      const teacher = await Teacher.findOne({ email });
+      // Same answer whether the account exists, is already verified, or the code
+      // is wrong — otherwise this becomes the account lookup that registration
+      // deliberately is not.
+      const generic = { message: "That code is not valid, or it has expired." };
+      if (!teacher?.emailOtp || !teacher.emailOtpExpires) return res.status(400).json(generic);
+      if (teacher.emailOtpExpires.getTime() < Date.now()) return res.status(400).json(generic);
+
+      const attempts = (teacher.emailOtpAttempts ?? 0) + 1;
+      const supplied = Buffer.from(hashOtp(otp), "hex");
+      const actual = Buffer.from(String(teacher.emailOtp), "hex");
+      const matches =
+        supplied.length > 0 && supplied.length === actual.length &&
+        crypto.timingSafeEqual(supplied, actual);
+
+      if (!matches) {
+        if (attempts >= OTP_MAX_ATTEMPTS) {
+          await Teacher.updateOne({ _id: teacher._id }, {
+            $set: { emailOtpAttempts: 0 }, $unset: { emailOtp: 1, emailOtpExpires: 1 },
+          });
+        } else {
+          await Teacher.updateOne({ _id: teacher._id }, { $set: { emailOtpAttempts: attempts } });
+        }
+        return res.status(400).json(generic);
+      }
+
+      await Teacher.updateOne({ _id: teacher._id }, {
+        $set: { emailVerified: true, emailOtpAttempts: 0 },
+        $unset: { emailOtp: 1, emailOtpExpires: 1 },
+      });
+      res.json({
+        success: true,
+        message: "Address confirmed. An administrator will approve the account before you can sign in.",
+      });
+    } catch (err: any) {
+      console.error("Verify email error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/teacher/resend-verification", authLimiter, async (req, res) => {
+    try {
+      const email = normalizeEmail(req.body.email);
+      const sent = { success: true, message: "If that address needs confirming, a new code is on its way." };
+      if (!email) return res.status(400).json({ message: "Email is required" });
+
+      const teacher = await Teacher.findOne({ email });
+      if (!teacher || teacher.emailVerified) return res.json(sent);
+
+      // One code a minute per account, for the same reason the reset code is
+      // bounded: without it, a fresh code means a fresh budget of guesses, and
+      // anyone could flood the inbox on demand.
+      if (
+        teacher.emailOtpExpires &&
+        teacher.emailOtpExpires.getTime() - OTP_TTL_MS > Date.now() - OTP_REISSUE_MIN_INTERVAL_MS
+      ) {
+        return res.json(sent);
+      }
+
+      const otp = crypto.randomInt(100000, 1000000).toString();
+      await Teacher.updateOne({ _id: teacher._id }, {
+        $set: {
+          emailOtp: hashOtp(otp),
+          emailOtpExpires: new Date(Date.now() + OTP_TTL_MS),
+          emailOtpAttempts: 0,
+        },
+      });
+      const { sendVerificationEmail } = await import('./emailService');
+      sendVerificationEmail(teacher.email, teacher.name, otp).catch(() => {});
+      res.json(sent);
+    } catch (err: any) {
+      console.error("Resend verification error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -1170,9 +1271,15 @@ export async function registerRoutes(
         await Teacher.updateOne({ _id: teacher._id }, { password: await hashPassword(password) });
       }
 
-      // Checked after the password, deliberately. Rejecting earlier would let
-      // anyone probe which addresses have accounts by watching which ones
-      // answer "pending" instead of "invalid credentials".
+      // Both of these are checked after the password, deliberately. Rejecting
+      // earlier would let anyone probe which addresses have accounts by
+      // watching which ones answer "pending" instead of "invalid credentials".
+      if (teacher.emailVerified === false) {
+        return res.status(403).json({
+          needsVerification: true,
+          message: "Confirm your email address first — check your inbox for the 6-digit code.",
+        });
+      }
       if (teacher.approved === false) {
         return res.status(403).json({
           message: "This account is waiting for administrator approval.",
@@ -1464,7 +1571,7 @@ export async function registerRoutes(
   app.get("/api/admin/teachers", requireAdmin, async (_req, res) => {
     try {
       const teachers = await Teacher.find()
-        .select("name email empId department approved createdAt lockedUntil")
+        .select("name email empId department approved emailVerified createdAt lockedUntil")
         .sort({ approved: 1, createdAt: -1 })
         .lean();
       const now = Date.now();
@@ -1476,6 +1583,9 @@ export async function registerRoutes(
           // sign-ins. The dashboard had no way to see this, so an admin
           // fielding "I can't log in" had no idea it was the cause.
           locked: !!t.lockedUntil && t.lockedUntil.getTime() > now,
+          // Shown so an administrator does not approve an address whose owner
+          // never confirmed it — the whole point of the code.
+          emailVerified: t.emailVerified !== false,
           lockedUntil: undefined,
         })),
       );

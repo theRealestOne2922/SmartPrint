@@ -188,6 +188,18 @@ async function seedDefaultData() {
       console.log(`[seed] ✅ Approved ${migrated.modifiedCount} pre-existing teacher account(s).`);
     }
 
+    // Email confirmation is new. Every account that existed before it was in
+    // real use and its owner has been signing in — so they are treated as
+    // confirmed rather than locked out of a system they used yesterday. Runs
+    // once; afterwards no document is missing the field.
+    const verified = await Teacher.updateMany(
+      { emailVerified: { $exists: false } },
+      { $set: { emailVerified: true } },
+    );
+    if (verified.modifiedCount > 0) {
+      console.log(`[seed] ✅ Marked ${verified.modifiedCount} pre-existing account(s) as email-confirmed.`);
+    }
+
     // Sign-in now normalises the address to lower case before looking it up, so
     // an account stored as Bob@vit.ac.in would stop matching. Bring the stored
     // values in line. Done one at a time and skipping collisions, because the

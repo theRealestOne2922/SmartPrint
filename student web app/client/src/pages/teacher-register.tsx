@@ -20,7 +20,45 @@ export default function TeacherRegister() {
   const [password, setPassword] = useState("");
   const [empId, setEmpId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  // Set once registration succeeds: the address exists but is unconfirmed, so
+  // the page asks for the code instead of sending them to a login that refuses.
+  const [awaitingCode, setAwaitingCode] = useState(false);
+  const [code, setCode] = useState("");
   const { toast } = useToast();
+
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/teacher/verify-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp: code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "That code is not valid.");
+      toast({ title: "Address confirmed", description: data.message || "An administrator will approve your account." });
+      setLocation("/teacher-login");
+    } catch (err: any) {
+      toast({ title: "Could not confirm", description: err.message, variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resendCode = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/teacher/resend-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      toast({ title: "Sent", description: data.message || "A new code is on its way." });
+    } catch {
+      toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,10 +82,12 @@ export default function TeacherRegister() {
       // all. A teacher told "you can now log in" and then refused would read it
       // as the system being broken.
       toast({
-        title: "Registration received",
-        description: data.message || "An administrator will approve your account before you can sign in.",
+        title: "Check your email",
+        description: data.message || "Enter the 6-digit code we sent to confirm this address.",
       });
-      setLocation("/teacher-login");
+      // Stay on the page and ask for the code, rather than bouncing to a login
+      // that will refuse them — the address is not confirmed yet.
+      setAwaitingCode(true);
     } catch (err: any) {
       toast({
         title: "Registration Failed",
@@ -125,6 +165,48 @@ export default function TeacherRegister() {
           </CardHeader>
 
           <CardContent className="pt-4">
+            {awaitingCode ? (
+              <form onSubmit={submitCode} className="space-y-4">
+                <p className="text-sm text-zinc-600 leading-relaxed">
+                  A 6-digit code is on its way to{" "}
+                  <span className="font-medium text-zinc-900">{email}</span>. Enter it
+                  below to confirm the address is yours.
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="code" className="text-zinc-700 text-sm font-medium">
+                    Verification code
+                  </Label>
+                  <Input
+                    id="code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    required
+                    placeholder="6-digit code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    className="bg-white border-zinc-200 text-zinc-950 tracking-[0.4em] text-center text-lg h-11"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isLoading || code.length !== 6}
+                  className="w-full py-2.5 px-4 rounded-lg font-semibold text-sm bg-primary text-black hover:bg-primary/95 transition-colors disabled:opacity-50"
+                >
+                  {isLoading ? "Confirming…" : "Confirm address"}
+                </button>
+                <div className="flex items-center justify-between text-xs">
+                  <button type="button" onClick={resendCode} className="text-primary hover:underline font-medium">
+                    Resend code
+                  </button>
+                  <span className="text-zinc-400">Expires in 15 minutes</span>
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  Confirming proves the address is yours. An administrator still has to
+                  approve the account before you can sign in.
+                </p>
+              </form>
+            ) : (
             <motion.form
               onSubmit={handleSubmit}
               className="space-y-4"
@@ -233,6 +315,7 @@ export default function TeacherRegister() {
                 )}
               </button>
             </motion.form>
+            )}
 
             <div className="mt-6 text-center text-sm">
               <span className="text-zinc-500">Already have an account? </span>

@@ -7,6 +7,10 @@ export interface ITeacher {
   password: string;
   department: string | null;
   approved?: boolean;
+  emailVerified?: boolean;
+  emailOtp?: string | null;
+  emailOtpExpires?: Date | null;
+  emailOtpAttempts?: number;
   failedLoginCount?: number;
   lastFailedLoginAt?: Date | null;
   lockedUntil?: Date | null;
@@ -33,6 +37,17 @@ const teacherSchema = new Schema<ITeacherDocument>(
     // until an admin approves it. Accounts that predate this are approved by the
     // startup migration; nobody currently working gets locked out.
     approved: { type: Boolean, default: false },
+    // Proof the person registering can read mail at the address they gave.
+    // Domain alone is not identity: anyone could type principal@vit.ac.in, and
+    // an administrator looking at a plausible VIT address has no way to tell.
+    // Accounts predating this rule are marked verified by the startup
+    // migration, so nobody in daily use is locked out.
+    emailVerified: { type: Boolean, default: false },
+    emailOtp: { type: String, default: null },
+    emailOtpExpires: { type: Date, default: null },
+    // Wrong guesses against the current code, bounded per account for the same
+    // reason the reset code is — see consumeOtp in routes.ts.
+    emailOtpAttempts: { type: Number, default: 0 },
     // Failed sign-ins for this account, counted wherever they come from.
     // The rate limiter on the login route counts per address, which buys an
     // attacker another budget for every address they use; a password is worth

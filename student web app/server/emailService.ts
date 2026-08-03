@@ -157,3 +157,52 @@ export async function sendPasswordResetEmail(
   }
   return success;
 }
+
+export async function sendVerificationEmail(
+  toEmail: string,
+  teacherName: string,
+  otp: string,
+): Promise<boolean> {
+  if (!brevoApiKey) {
+    console.warn('Email not configured — skipping verification email');
+    return false;
+  }
+
+  const subject = `SmartPrint — Verify your email`;
+  const html = `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #fafafa; border-radius: 16px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="font-size: 24px; color: #111; margin: 0;">SmartPrint</h1>
+        <p style="color: #666; font-size: 14px; margin: 4px 0 0;">VIT Chennai</p>
+      </div>
+
+      <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid #eee;">
+        <p style="color: #333; font-size: 15px; margin: 0 0 16px;">
+          Hi <strong>${esc(teacherName)}</strong>,
+        </p>
+        <p style="color: #333; font-size: 15px; margin: 0 0 20px;">
+          Someone requested a SmartPrint staff account for this address. Enter the
+          code below to confirm it is you.
+        </p>
+
+        <div style="background: #FFF8E1; border: 2px solid #FFD54F; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 20px;">
+          <p style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px; font-weight: 600;">Verification Code</p>
+          <p style="font-size: 40px; font-weight: 800; letter-spacing: 8px; color: #111; margin: 0;">${esc(otp)}</p>
+        </div>
+
+        <p style="color: #666; font-size: 13px; margin: 0; line-height: 1.5;">
+          This code expires in 15 minutes. After verifying, an administrator still
+          has to approve the account before you can sign in.
+        </p>
+      </div>
+
+      <p style="text-align: center; color: #999; font-size: 11px; margin: 20px 0 0;">
+        If you did not request this, ignore this email — no account becomes usable without it.
+      </p>
+    </div>
+  `;
+
+  const success = await sendBrevoEmail(toEmail, subject, html);
+  if (success) console.log(`📧 Verification email sent to ${toEmail}`);
+  return success;
+}
