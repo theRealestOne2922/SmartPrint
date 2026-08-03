@@ -780,7 +780,11 @@ export default function AdminDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white border-zinc-200 shadow-soft lg:sticky lg:top-24">
+            {/* Was lg:sticky lg:top-24 — pinned in place, from when this was the
+                last card in the column. The admin-password card sits below it
+                now, so sticking here dragged System Settings down the page as
+                the cursor scrolled toward it. Plain flow. */}
+            <Card className="bg-white border-zinc-200 shadow-soft">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-zinc-950">
                   <Settings className="w-5 h-5 text-primary" />
