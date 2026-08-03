@@ -329,6 +329,21 @@ const registerLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// The same gap as registerLimiter, found by re-checking this route with that
+// bug in mind. Every branch of forgot-password answers 200 — that is what
+// stops it revealing which addresses have accounts — so skipSuccessfulRequests
+// makes it invisible to authLimiter for every real call. The per-account
+// one-minute reissue throttle only bounds repeats against the SAME address; it
+// does nothing to stop one caller working through a list of many different
+// real addresses, each good for one guaranteed send. Counts every attempt.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { message: "Too many requests from this network. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Issuing a print code is cheap but must not become an oracle for probing
 // which codes exist, so every request counts here.
 const codeLimiter = rateLimit({
@@ -1407,7 +1422,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teacher/forgot-password", authLimiter, async (req, res) => {
+  app.post("/api/teacher/forgot-password", forgotPasswordLimiter, async (req, res) => {
     try {
       const email = normalizeEmail(req.body.email);
       if (!email) {
