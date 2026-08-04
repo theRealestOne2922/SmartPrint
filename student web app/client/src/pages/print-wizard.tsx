@@ -309,6 +309,17 @@ export default function PrintWizard() {
   // without loosening the CSP, the same way the booklet view already does.
   const [directPreviewUrl, setDirectPreviewUrl] = useState<string | null>(null);
   const [isLoadingDirectPreview, setIsLoadingDirectPreview] = useState(false);
+  // .docx preview, rendered client-side with mammoth (dynamically imported —
+  // it's only fetched when someone actually opens a .docx preview). This used
+  // to go through Google's docs.google.com/gview, an unofficial, unsupported
+  // endpoint whose reliability depends on the viewer's own network — it would
+  // sometimes just fail and hand back a raw file download instead of a
+  // preview, which is exactly what looked broken on a lab PC. Converting the
+  // bytes ourselves has no network dependency once the file is fetched, so it
+  // behaves identically everywhere. Other Office formats (ppt/xls/etc.) have
+  // no equivalent library here and keep the plain file-info card.
+  const [docxPreviewHtml, setDocxPreviewHtml] = useState<string | null>(null);
+  const [isLoadingDocxPreview, setIsLoadingDocxPreview] = useState(false);
   const getSettingsFor = (index: number | null) => index !== null && fileSettings[index] ? fileSettings[index] : globalSettings;
 
   // Derive the active paper size for the currently-previewed file so the booklet
@@ -376,6 +387,7 @@ export default function PrintWizard() {
     if (previewFileIndex === null) {
       setBookletPreviewUrl(null);
       setDirectPreviewUrl(null);
+      setDocxPreviewHtml(null);
       return;
     }
 
@@ -385,6 +397,7 @@ export default function PrintWizard() {
     const ext = fd.fileName.toLowerCase().split('.').pop() || '';
     const isPdf = ext === 'pdf';
     const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'jfif', 'svg', 'tiff', 'tif', 'heic', 'avif'].includes(ext);
+    const isDocx = ext === 'docx';
     const settings = getSettingsFor(previewFileIndex);
 
     if (isImg || (isPdf && settings.paperSize !== 'a3')) {
@@ -407,6 +420,30 @@ export default function PrintWizard() {
       })();
     } else {
       setDirectPreviewUrl(null);
+    }
+
+    // A3 keeps the existing "Page 1" placeholder — mammoth produces flowing
+    // HTML with no page boundaries, so it has nothing to offer the booklet
+    // layout view, which is about imposition, not content.
+    if (isDocx && settings.paperSize !== 'a3') {
+      setDocxPreviewHtml(null);
+      setIsLoadingDocxPreview(true);
+      (async () => {
+        try {
+          const response = await fetch(fd.filePath);
+          const arrayBuffer = await response.arrayBuffer();
+          const mammoth = await import('mammoth');
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          setDocxPreviewHtml(result.value);
+        } catch (e) {
+          console.error("Failed to render docx preview:", e);
+          setDocxPreviewHtml(null);
+        } finally {
+          setIsLoadingDocxPreview(false);
+        }
+      })();
+    } else {
+      setDocxPreviewHtml(null);
     }
 
     if (isPdf && settings.paperSize === 'a3') {
@@ -1563,15 +1600,34 @@ export default function PrintWizard() {
                               );
                             }
                             if (isOffice) {
-                              // Word/PowerPoint/Excel can't be rendered by the browser directly,
-                              // and previewing them used to route through Google's unofficial
-                              // gview endpoint. That is not a service Google supports or
-                              // guarantees: depending on the viewer's network and browser
-                              // settings it sometimes fails to render and just downloads the
-                              // raw file instead of showing anything — confusing on a shared
-                              // lab machine with no warning it was ever a preview. Always
-                              // showing this card instead is less flashy but never surprises
-                              // anyone; the document itself still prints exactly as uploaded.
+                              // .docx is rendered client-side with mammoth — no network
+                              // dependency once the file is fetched, so it behaves the same
+                              // on every machine. Word/PowerPoint/Excel previews used to route
+                              // through Google's unofficial gview endpoint, which sometimes
+                              // just failed and handed back a raw file download instead of a
+                              // preview — that's the "downloads instead of previewing on a lab
+                              // PC" behavior. Other Office formats have no equivalent renderer
+                              // here, so they keep the plain file-info card below.
+                              if (ext === 'docx' && !isBooklet) {
+                                if (isLoadingDocxPreview) {
+                                  return paperFrame(
+                                    <div className="w-full h-full flex flex-col items-center justify-center space-y-4">
+                                      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                                      <p className="text-sm font-medium text-muted-foreground animate-pulse">Loading preview...</p>
+                                    </div>
+                                  );
+                                }
+                                if (docxPreviewHtml !== null) {
+                                  return paperFrame(
+                                    <div
+                                      className={`w-full h-full overflow-y-auto p-6 text-sm leading-relaxed text-black [&_h1]:text-xl [&_h1]:font-bold [&_h2]:text-lg [&_h2]:font-bold [&_h2]:mt-3 [&_p]:mb-2 [&_table]:border-collapse [&_td]:border [&_td]:border-gray-300 [&_td]:p-1 [&_img]:max-w-full ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
+                                      dangerouslySetInnerHTML={{ __html: docxPreviewHtml }}
+                                    />
+                                  );
+                                }
+                                // mammoth failed (corrupted/unusual file) — fall through to the
+                                // same reliable card every other Office format uses.
+                              }
                               return paperFrame(
                                 onSheet(
                                   <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
