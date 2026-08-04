@@ -47,6 +47,13 @@
     user-select: none; /* Disable text selection globally */
     -webkit-user-drag: none;
     -webkit-touch-callout: none;
+    /* The touchscreen's driver emulates a mouse pointer under the hood, so
+       every tap moves an X11 cursor that unclutter only hides after a short
+       idle window — on a kiosk that's tapped constantly, it never stays
+       hidden long enough to actually disappear. Doing it here instead means
+       Chromium never draws a cursor over the page at all, regardless of
+       what the OS pointer is doing — nothing for a touch to make flicker. */
+    cursor: none !important;
   }
 
   html, body, #root {
