@@ -303,7 +303,6 @@ export default function PrintWizard() {
   // Which tab the preview is on. 'document' is the plain page view people expect;
   // 'layout' shows how an A3 job is imposed onto the folded sheet. Only offered
   // for A3, since on A4 the document view already is the printed layout.
-  const [previewMode, setPreviewMode] = useState<'document' | 'layout'>('document');
   const getSettingsFor = (index: number | null) => index !== null && fileSettings[index] ? fileSettings[index] : globalSettings;
 
   // Derive the active paper size for the currently-previewed file so the booklet
@@ -361,11 +360,6 @@ export default function PrintWizard() {
 
   const uploadMutation = useUploadFile();
   const createJobMutation = useCreatePrintJob();
-
-  // Always open a preview on the document, whichever tab was last used.
-  useEffect(() => {
-    setPreviewMode('document');
-  }, [previewFileIndex]);
 
   // Booklet preview generator effect
   useEffect(() => {
@@ -1337,7 +1331,7 @@ export default function PrintWizard() {
                            dialog — at the portrait width the two halves are too small to
                            actually check anything on. */
                         className={`bg-card rounded-3xl shadow-2xl w-full max-h-[80vh] overflow-hidden flex flex-col ${
-                          getSettingsFor(previewFileIndex).paperSize === 'a3' && previewMode === 'layout'
+                          getSettingsFor(previewFileIndex).paperSize === 'a3'
                             ? 'max-w-4xl'
                             : 'max-w-2xl'
                         }`}
@@ -1366,29 +1360,6 @@ export default function PrintWizard() {
                             <X className="w-5 h-5" />
                           </button>
                         </div>
-                        {/* Document / layout tabs. Only for A3: an A4 job prints exactly
-                            what the document view already shows, so a second tab there
-                            would be the same picture twice. */}
-                        {getSettingsFor(previewFileIndex).paperSize === 'a3' && (
-                          <div className="px-5 pt-4 flex items-center gap-2">
-                            {([
-                              { key: 'document', label: 'Document' },
-                              { key: 'layout', label: 'Print layout' },
-                            ] as const).map((tab) => (
-                              <button
-                                key={tab.key}
-                                onClick={() => setPreviewMode(tab.key)}
-                                className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                                  previewMode === tab.key
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-secondary text-muted-foreground hover:text-foreground'
-                                }`}
-                              >
-                                {tab.label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
                         <div className="flex-1 overflow-auto p-5 flex items-center justify-center min-h-[300px]">
                           {(() => {
                             const fd = fileDetailsList[previewFileIndex];
@@ -1410,10 +1381,10 @@ export default function PrintWizard() {
                             // identical to A4 and the size change looked like it did
                             // nothing at all.
                             const isA3 = settings.paperSize === 'a3';
-                            // The layout view is opt-in via the tabs. The document tab shows the
-                            // file the way people expect to read it; only the layout tab redraws
-                            // it as the folded A3 sheet the printer actually produces.
-                            const isBooklet = isA3 && previewMode === 'layout';
+                            // Every A3 job is imposed as a booklet, so the preview always shows
+                            // the folded sheet the printer actually produces — no separate
+                            // "raw document" view to toggle to.
+                            const isBooklet = isA3;
                             const isLandscape = isBooklet ? true : settings.orientation === 'landscape';
                             // A4 = 210x297mm, A3 = 297x420mm
                             const paperW = isLandscape ? (isA3 ? 420 : 297) : (isA3 ? 297 : 210);
