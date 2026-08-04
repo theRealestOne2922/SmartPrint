@@ -1400,9 +1400,13 @@ export default function PrintWizard() {
                         onClick={(e) => e.stopPropagation()}
                         /* A3 sheets are landscape and carry two pages, so give them a wider
                            dialog — at the portrait width the two halves are too small to
-                           actually check anything on. */
+                           actually check anything on. A .docx preview is reconstructed HTML,
+                           not a real page image, and it reads as cramped at the narrow A4
+                           preview width — a wider box gives its table columns and margins
+                           room to look like a document instead of a squeezed data grid. */
                         className={`bg-card rounded-3xl shadow-2xl w-full max-h-[80vh] overflow-hidden flex flex-col ${
-                          getSettingsFor(previewFileIndex).paperSize === 'a3'
+                          getSettingsFor(previewFileIndex).paperSize === 'a3' ||
+                          fileDetailsList[previewFileIndex].fileName.toLowerCase().endsWith('.docx')
                             ? 'max-w-4xl'
                             : 'max-w-2xl'
                         }`}
@@ -1461,7 +1465,12 @@ export default function PrintWizard() {
                             const paperW = isLandscape ? (isA3 ? 420 : 297) : (isA3 ? 297 : 210);
                             const paperH = isLandscape ? (isA3 ? 297 : 210) : (isA3 ? 420 : 297);
                             const frameMaxH = isA3 ? '62vh' : '55vh';
-                            const frameMaxW = isA3 ? (isLandscape ? '700px' : '520px') : (isLandscape ? '600px' : '420px');
+                            // A .docx preview is reconstructed HTML, not a real page image — at
+                            // the same narrow width a PDF looks fine at, its table columns and
+                            // margins read as cramped. Giving it more room is what a wider preview
+                            // dialog is for; matches the max-w-4xl bump on the dialog itself.
+                            const isDocxPreview = ext === 'docx' && !isBooklet;
+                            const frameMaxW = isA3 ? (isLandscape ? '700px' : '520px') : isDocxPreview ? '680px' : (isLandscape ? '600px' : '420px');
 
                             const paperFrame = (content: React.ReactNode) => (
                               <div className="relative flex flex-col items-center w-full">
@@ -1620,7 +1629,15 @@ export default function PrintWizard() {
                                 if (docxPreviewHtml !== null) {
                                   return paperFrame(
                                     <div
-                                      className={`w-full h-full overflow-y-auto p-6 text-sm leading-relaxed text-black [&_h1]:text-xl [&_h1]:font-bold [&_h2]:text-lg [&_h2]:font-bold [&_h2]:mt-3 [&_p]:mb-2 [&_table]:border-collapse [&_td]:border [&_td]:border-gray-300 [&_td]:p-1 [&_img]:max-w-full ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
+                                      // A real page reads with a serif body font, breathing room
+                                      // around the edges, and a table that wraps inside its column
+                                      // instead of forcing the whole page to scroll sideways — none
+                                      // of which HTML gives you for free. table-fixed is what makes
+                                      // the wrapping possible: without it a browser sizes columns to
+                                      // fit their longest word, which is exactly what pushed content
+                                      // off the right edge before.
+                                      style={{ fontFamily: "Georgia, 'Times New Roman', Times, serif" }}
+                                      className={`w-full h-full overflow-y-auto overflow-x-hidden bg-white px-12 py-10 text-[14px] leading-[1.6] text-black [&_h1]:text-[22px] [&_h1]:font-bold [&_h1]:mt-1 [&_h1]:mb-4 [&_h1]:pb-2 [&_h1]:border-b [&_h1]:border-gray-300 [&_h2]:text-[18px] [&_h2]:font-bold [&_h2]:mt-5 [&_h2]:mb-3 [&_h3]:text-[16px] [&_h3]:font-bold [&_h3]:mt-4 [&_h3]:mb-2 [&_p]:mb-3 [&_strong]:font-semibold [&_em]:italic [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-3 [&_li]:mb-1 [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:my-4 [&_table]:text-[13px] [&_td]:border [&_td]:border-gray-500 [&_td]:p-2.5 [&_td]:align-top [&_td]:break-words [&_th]:border [&_th]:border-gray-500 [&_th]:p-2.5 [&_th]:bg-gray-100 [&_th]:font-semibold [&_th]:text-left [&_th]:break-words [&_img]:max-w-full ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
                                       dangerouslySetInnerHTML={{ __html: docxPreviewHtml }}
                                     />
                                   );
