@@ -300,9 +300,15 @@ export default function PrintWizard() {
   // Booklet preview state
   const [bookletPreviewUrl, setBookletPreviewUrl] = useState<string | null>(null);
   const [isGeneratingBooklet, setIsGeneratingBooklet] = useState(false);
-  // Which tab the preview is on. 'document' is the plain page view people expect;
-  // 'layout' shows how an A3 job is imposed onto the folded sheet. Only offered
-  // for A3, since on A4 the document view already is the printed layout.
+  // Direct-preview blob state, for a plain (non-booklet) PDF or an image. The
+  // obvious thing would be to point the iframe/img straight at fd.filePath,
+  // but that URL is on the API's origin — this page's CSP only allows
+  // frame-src 'self'/blob:/docs.google.com and img-src 'self'/data:/blob:, so
+  // a direct cross-origin src is silently blocked by the browser either way.
+  // Fetching the bytes ourselves and rendering a blob: URL sidesteps that
+  // without loosening the CSP, the same way the booklet view already does.
+  const [directPreviewUrl, setDirectPreviewUrl] = useState<string | null>(null);
+  const [isLoadingDirectPreview, setIsLoadingDirectPreview] = useState(false);
   const getSettingsFor = (index: number | null) => index !== null && fileSettings[index] ? fileSettings[index] : globalSettings;
 
   // Derive the active paper size for the currently-previewed file so the booklet
@@ -361,13 +367,15 @@ export default function PrintWizard() {
   const uploadMutation = useUploadFile();
   const createJobMutation = useCreatePrintJob();
 
-  // Booklet preview generator effect
+  // Booklet / direct (PDF or image) preview generator effect
   useEffect(() => {
-    // Track the blob URL created in this effect run so we can revoke it on cleanup
+    // Track the blob URLs created in this effect run so we can revoke them on cleanup
     let currentBlobUrl: string | null = null;
+    let currentDirectBlobUrl: string | null = null;
 
     if (previewFileIndex === null) {
       setBookletPreviewUrl(null);
+      setDirectPreviewUrl(null);
       return;
     }
 
@@ -376,11 +384,34 @@ export default function PrintWizard() {
 
     const ext = fd.fileName.toLowerCase().split('.').pop() || '';
     const isPdf = ext === 'pdf';
+    const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'jfif', 'svg', 'tiff', 'tif', 'heic', 'avif'].includes(ext);
     const settings = getSettingsFor(previewFileIndex);
+
+    if (isImg || (isPdf && settings.paperSize !== 'a3')) {
+      setDirectPreviewUrl(null);
+      setIsLoadingDirectPreview(true);
+      (async () => {
+        try {
+          const response = await fetch(fd.filePath);
+          // response.blob() carries the server's real Content-Type, so this
+          // works for both formats without guessing a MIME type from the name.
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          currentDirectBlobUrl = url;
+          setDirectPreviewUrl(url);
+        } catch (e) {
+          console.error("Failed to load preview:", e);
+        } finally {
+          setIsLoadingDirectPreview(false);
+        }
+      })();
+    } else {
+      setDirectPreviewUrl(null);
+    }
 
     if (isPdf && settings.paperSize === 'a3') {
       setIsGeneratingBooklet(true);
-      
+
       const generateBooklet = async () => {
         try {
           // Fetch the PDF blob
@@ -449,10 +480,13 @@ export default function PrintWizard() {
       setBookletPreviewUrl(null);
     }
 
-    // Cleanup: revoke the blob URL when the effect re-runs or unmounts to prevent memory leaks
+    // Cleanup: revoke the blob URLs when the effect re-runs or unmounts to prevent memory leaks
     return () => {
       if (currentBlobUrl) {
         URL.revokeObjectURL(currentBlobUrl);
+      }
+      if (currentDirectBlobUrl) {
+        URL.revokeObjectURL(currentDirectBlobUrl);
       }
     };
   }, [previewFileIndex, fileDetailsList, previewPaperSize]);
@@ -1458,10 +1492,17 @@ export default function PrintWizard() {
                               );
 
                             if (isImg) {
+                              if (isLoadingDirectPreview) {
+                                return paperFrame(
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                                  </div>
+                                );
+                              }
                               return paperFrame(
                                 onSheet(
                                   <img
-                                    src={fd.filePath}
+                                    src={directPreviewUrl ?? fd.filePath}
                                     alt={fd.fileName}
                                     className={`w-full h-full object-contain p-3 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
                                   />
@@ -1488,46 +1529,61 @@ export default function PrintWizard() {
                                   );
                                 }
                               }
+                              if (isLoadingDirectPreview) {
+                                return paperFrame(
+                                  <div className="w-full h-full flex flex-col items-center justify-center space-y-4">
+                                    <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                                    <p className="text-sm font-medium text-muted-foreground animate-pulse">Loading preview...</p>
+                                  </div>
+                                );
+                              }
+                              if (directPreviewUrl) {
+                                return paperFrame(
+                                  onSheet(
+                                    <iframe
+                                      src={`${directPreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                                      className={`w-full h-full border-0 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
+                                      title={`Preview ${fd.fileName}`}
+                                    />
+                                  )
+                                );
+                              }
                               return paperFrame(
                                 onSheet(
-                                  <iframe
-                                    src={`${fd.filePath}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
-                                    className={`w-full h-full border-0 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
-                                    title={`Preview ${fd.fileName}`}
-                                  />
+                                  <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
+                                    <FileText className="w-10 h-10 text-primary/30" />
+                                    <p className="text-[11px] font-semibold text-foreground/70 line-clamp-2 break-all">
+                                      {fd.fileName}
+                                    </p>
+                                    <p className="text-[10px] text-muted-foreground/60">
+                                      Preview unavailable — will print as uploaded.
+                                    </p>
+                                  </div>
                                 )
                               );
                             }
                             if (isOffice) {
-                              // Google's viewer is a scrolling document viewer, not a page
-                              // renderer: it draws its own toolbar and page counter and stacks
-                              // every page continuously. Dropped into a booklet slot that looks
-                              // like a broken page, and it is a cross-origin frame so none of
-                              // that chrome can be styled away. On a booklet, show the page
-                              // position instead — the layout is the point here, and the
-                              // document itself is readable in the A4 view.
-                              if (isBooklet) {
-                                return paperFrame(
-                                  onSheet(
-                                    <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
-                                      <FileText className="w-10 h-10 text-primary/30" />
-                                      <p className="text-[11px] font-semibold text-foreground/70 line-clamp-2 break-all">
-                                        {fd.fileName}
-                                      </p>
-                                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground/60">
-                                        Page 1
-                                      </p>
-                                    </div>
-                                  )
-                                );
-                              }
-                              const viewerUrl = `https://docs.google.com/gview?url=${encodeURIComponent(fd.filePath)}&embedded=true`;
+                              // Word/PowerPoint/Excel can't be rendered by the browser directly,
+                              // and previewing them used to route through Google's unofficial
+                              // gview endpoint. That is not a service Google supports or
+                              // guarantees: depending on the viewer's network and browser
+                              // settings it sometimes fails to render and just downloads the
+                              // raw file instead of showing anything — confusing on a shared
+                              // lab machine with no warning it was ever a preview. Always
+                              // showing this card instead is less flashy but never surprises
+                              // anyone; the document itself still prints exactly as uploaded.
                               return paperFrame(
-                                <iframe
-                                  src={viewerUrl}
-                                  className={`w-full h-full border-0 ${settings.colorMode === 'bw' ? 'grayscale' : ''}`}
-                                  title={`Preview ${fd.fileName}`}
-                                />
+                                onSheet(
+                                  <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
+                                    <FileText className="w-10 h-10 text-primary/30" />
+                                    <p className="text-[11px] font-semibold text-foreground/70 line-clamp-2 break-all">
+                                      {fd.fileName}
+                                    </p>
+                                    <p className="text-[10px] text-muted-foreground/60">
+                                      {isBooklet ? 'Page 1 — preview unavailable for this format.' : 'Preview unavailable — will print as uploaded.'}
+                                    </p>
+                                  </div>
+                                )
                               );
                             }
                             // Fallback: try rendering as image first (covers edge cases), with file info overlay
