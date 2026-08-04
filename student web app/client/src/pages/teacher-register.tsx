@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,26 @@ export default function TeacherRegister() {
   const [password, setPassword] = useState("");
   const [empId, setEmpId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  // A Faculty ID only matters as the second factor confidential jobs check
+  // at the kiosk. While that's switched off there's nothing for it to gate,
+  // so asking for one here is just friction — mirrors the same setting the
+  // print wizard reads to show/hide its confidential toggle.
+  const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
+
+  useEffect(() => {
+    async function fetchSettings() {
+      try {
+        const res = await fetch(`${API_BASE}/api/settings`);
+        if (!res.ok) throw new Error("Failed to fetch settings");
+        const settings = await res.json();
+        const confSetting = settings.find((s: any) => s.key === "confidentialPrintingEnabled");
+        setConfidentialPrintingEnabled(confSetting?.value !== "false");
+      } catch (e) {
+        console.error("Failed to load settings:", e);
+      }
+    }
+    fetchSettings();
+  }, []);
   // Set once registration succeeds: the address exists but is unconfirmed, so
   // the page asks for the code instead of sending them to a login that refuses.
   const [awaitingCode, setAwaitingCode] = useState(false);
@@ -252,21 +272,24 @@ export default function TeacherRegister() {
                 </p>
               </div>
 
-              {/* Emp ID */}
-              <div className="space-y-1.5">
-                <Label htmlFor="empId" className="text-zinc-700 text-sm font-medium">
-                  Employee ID / Faculty ID
-                </Label>
-                <Input
-                  id="empId"
-                  type="text"
-                  required
-                  placeholder="e.g. VIT12345"
-                  value={empId}
-                  onChange={(e) => setEmpId(e.target.value)}
-                  className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
-                />
-              </div>
+              {/* Emp ID — only asked for while confidential printing is on;
+                  that's the only thing a Faculty ID gates. */}
+              {confidentialPrintingEnabled && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="empId" className="text-zinc-700 text-sm font-medium">
+                    Employee ID / Faculty ID
+                  </Label>
+                  <Input
+                    id="empId"
+                    type="text"
+                    required
+                    placeholder="e.g. VIT12345"
+                    value={empId}
+                    onChange={(e) => setEmpId(e.target.value)}
+                    className="bg-white border-zinc-200 text-zinc-950 placeholder:text-zinc-400 focus:border-primary focus:ring-primary/20 h-11 transition-colors"
+                  />
+                </div>
+              )}
 
               {/* Password */}
               <div className="space-y-1.5">

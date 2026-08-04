@@ -1150,9 +1150,23 @@ export async function registerRoutes(
       const name = asString(req.body.name)?.trim();
       const email = normalizeEmail(req.body.email);
       const password = asString(req.body.password);
-      const empId = asString(req.body.empId)?.trim();
-      if (!name || !email || !password || !empId) {
-        return res.status(400).json({ message: "Name, email, password, and empId are required" });
+      let empId = asString(req.body.empId)?.trim();
+      if (!name || !email || !password) {
+        return res.status(400).json({ message: "Name, email, and password are required" });
+      }
+      // A Faculty ID only means anything as the second factor for confidential
+      // jobs — see verify-faculty. While that feature is switched off there is
+      // nothing for it to gate, so asking every new account for one is pure
+      // friction. empId stays required in the schema (it is still how a
+      // confidential job's verify-faculty check finds its owner), so an
+      // account made while the switch is off gets a random placeholder instead
+      // of an empty value — a real one can be set once the switch is back on.
+      if (await confidentialPrintingEnabled()) {
+        if (!empId) {
+          return res.status(400).json({ message: "Faculty ID is required" });
+        }
+      } else if (!empId) {
+        empId = `AUTO-${crypto.randomBytes(6).toString("hex")}`;
       }
       // Rejected before anything is created. This reveals nothing about who
       // already has an account — it is a property of the address typed in — so
