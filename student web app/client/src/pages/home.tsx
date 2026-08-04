@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/button";
-import { ArrowRight, UploadCloud, IndianRupee, Printer as PrinterIcon, CheckCircle } from "lucide-react";
+import { ArrowRight, UploadCloud, KeyRound, Printer as PrinterIcon, CheckCircle } from "lucide-react";
 import { motion } from "framer-motion";
 
 const steps = [
@@ -11,9 +11,9 @@ const steps = [
     description: "Upload any document securely from your phone or computer."
   },
   {
-    icon: IndianRupee,
-    title: "Pay & Get Code",
-    description: "Pay via UPI and receive your 6-digit print code instantly."
+    icon: KeyRound,
+    title: "Get Your Code",
+    description: "Receive your 6-digit print code instantly — no payment needed."
   },
   {
     icon: PrinterIcon,
