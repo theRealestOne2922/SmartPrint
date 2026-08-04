@@ -1566,7 +1566,20 @@ export default function PrintWizard() {
                   <div>
                     <p className="text-muted-foreground text-sm font-medium mb-1">Ready to Print</p>
                     <div className="flex items-end gap-1">
-                      <span className="text-2xl font-display font-bold leading-none">{fileDetailsList.length} files</span>
+                      {(() => {
+                        // Pages actually printed, not pages in the source file — a
+                        // 1-page document set to 5 copies is 5 sheets, and that is
+                        // the number worth being aware of before submitting.
+                        const totalPages = fileDetailsList.reduce(
+                          (sum, fd, idx) => sum + fd.pageCount * getSettingsFor(idx).copies,
+                          0
+                        );
+                        return (
+                          <span className="text-2xl font-display font-bold leading-none">
+                            {totalPages} page{totalPages !== 1 ? 's' : ''}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                   <Button
