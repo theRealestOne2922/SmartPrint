@@ -343,6 +343,57 @@ export default function PrintWizard() {
     }
   };
 
+  // Copies can be typed as well as stepped, so the raw text is tracked
+  // separately from the number the job actually uses. Mid-edit the field is
+  // legitimately not a number — it is empty for a moment on the way from "1"
+  // to "25" — and coercing that back on every keystroke makes the field
+  // impossible to type into. So `copies` only ever moves to a real value of 1
+  // or more, and the text snaps back to it on blur if what was typed never
+  // became one. Nothing downstream (page totals, the print job itself) can
+  // therefore see a blank or zero.
+  // The server independently rejects anything outside 1..500, so the same
+  // ceiling is applied here — not to restrict anyone, but so an over-large
+  // number is caught the moment it is typed rather than by a failed submit
+  // after the whole form is filled in.
+  const MAX_COPIES = 500;
+
+  const copiesTextOf = (index: number | null) => {
+    const s = getSettingsFor(index);
+    return s.copiesInput ?? String(s.copies);
+  };
+
+  const copiesTextTooHigh = (index: number | null) => {
+    const raw = copiesTextOf(index);
+    return /^[1-9]\d*$/.test(raw) && parseInt(raw, 10) > MAX_COPIES;
+  };
+
+  const setCopiesText = (index: number | null, raw: string) => {
+    const cleaned = raw.replace(/\D/g, '');
+    const n = parseInt(cleaned, 10);
+    // `copies` follows the text only while the text is a usable value. Above
+    // the ceiling the text is kept as typed (so the hint can explain what is
+    // wrong) but `copies` stays where it was, and blur pulls the text back.
+    updateSettingsFor(
+      index,
+      Number.isFinite(n) && n >= 1 && n <= MAX_COPIES
+        ? { copies: n, copiesInput: cleaned }
+        : { copiesInput: cleaned },
+    );
+  };
+
+  const commitCopiesText = (index: number | null) => {
+    const s = getSettingsFor(index);
+    const raw = s.copiesInput ?? '';
+    if (!/^[1-9]\d*$/.test(raw) || parseInt(raw, 10) > MAX_COPIES) {
+      updateSettingsFor(index, { copiesInput: String(s.copies) });
+    }
+  };
+
+  const stepCopies = (index: number | null, delta: number) => {
+    const v = Math.min(MAX_COPIES, Math.max(1, getSettingsFor(index).copies + delta));
+    updateSettingsFor(index, { copies: v, copiesInput: String(v) });
+  };
+
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [settingsSnapshot, setSettingsSnapshot] = useState<Record<number, PrintSettings> | null>(null);
 
@@ -1050,19 +1101,34 @@ export default function PrintWizard() {
                                     <label className="text-xs font-semibold mb-2 block">Copies</label>
                                     <div className="flex items-center gap-2 bg-secondary/30 p-1 rounded-xl">
                                       <button
-                                        onClick={() => updateSettingsFor(idx, { copies: Math.max(1, getSettingsFor(idx).copies - 1) })}
+                                        onClick={() => stepCopies(idx, -1)}
                                         className="w-8 h-8 flex items-center justify-center rounded-lg bg-card shadow-sm hover:bg-primary/20"
                                       >
                                         <Minus className="w-3 h-3" />
                                       </button>
-                                      <span className="flex-1 text-center font-bold text-sm">{getSettingsFor(idx).copies}</span>
+                                      <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        aria-label="Number of copies"
+                                        value={copiesTextOf(idx)}
+                                        onChange={(e) => setCopiesText(idx, e.target.value)}
+                                        onBlur={() => commitCopiesText(idx)}
+                                        onFocus={(e) => e.currentTarget.select()}
+                                        className="flex-1 w-full min-w-0 text-center font-bold text-sm bg-transparent border-0 outline-none focus:ring-2 focus:ring-primary/40 rounded-md"
+                                      />
                                       <button
-                                        onClick={() => updateSettingsFor(idx, { copies: Math.min(500, getSettingsFor(idx).copies + 1) })}
-                                        className="w-8 h-8 flex items-center justify-center rounded-lg bg-card shadow-sm hover:bg-primary/20"
+                                        onClick={() => stepCopies(idx, 1)}
+                                        disabled={getSettingsFor(idx).copies >= MAX_COPIES}
+                                        className="w-8 h-8 flex items-center justify-center rounded-lg bg-card shadow-sm hover:bg-primary/20 disabled:opacity-30 disabled:hover:bg-card"
                                       >
                                         <Plus className="w-3 h-3" />
                                       </button>
                                     </div>
+                                    {copiesTextTooHigh(idx) && (
+                                      <p className="text-[10px] text-destructive mt-1">
+                                        Max {MAX_COPIES} copies.
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
 
@@ -1270,21 +1336,35 @@ export default function PrintWizard() {
                     <h3 className="text-lg font-semibold mb-4">Global Copies</h3>
                     <div className="flex items-center gap-4 bg-card border border-border p-2 rounded-2xl w-fit shadow-sm">
                       <button
-                        onClick={() => { const v = Math.max(1, globalSettings.copies - 1); updateSettingsFor(null, { copies: v, copiesInput: String(v) }); }}
+                        onClick={() => stepCopies(null, -1)}
                         disabled={globalSettings.copies <= 1}
                         className="w-12 h-12 flex items-center justify-center rounded-xl bg-secondary hover:bg-primary hover:text-black transition-all duration-200 disabled:opacity-30 disabled:hover:bg-secondary disabled:hover:text-foreground active:scale-95"
                       >
                         <Minus className="w-5 h-5" />
                       </button>
-                      <span className="text-2xl font-bold w-16 text-center tabular-nums">{globalSettings.copies}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Number of copies"
+                        value={copiesTextOf(null)}
+                        onChange={(e) => setCopiesText(null, e.target.value)}
+                        onBlur={() => commitCopiesText(null)}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="text-2xl font-bold w-20 text-center tabular-nums bg-transparent border-0 outline-none focus:ring-2 focus:ring-primary/40 rounded-lg"
+                      />
                       <button
-                        onClick={() => { const v = Math.min(500, globalSettings.copies + 1); updateSettingsFor(null, { copies: v, copiesInput: String(v) }); }}
-                        disabled={globalSettings.copies >= 500}
+                        onClick={() => stepCopies(null, 1)}
+                        disabled={globalSettings.copies >= MAX_COPIES}
                         className="w-12 h-12 flex items-center justify-center rounded-xl bg-secondary hover:bg-primary hover:text-black transition-all duration-200 disabled:opacity-30 disabled:hover:bg-secondary disabled:hover:text-foreground active:scale-95"
                       >
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
+                    {copiesTextTooHigh(null) && (
+                      <p className="text-xs text-destructive mt-2">
+                        Maximum {MAX_COPIES} copies per job.
+                      </p>
+                    )}
                   </div>
 
                   {/* Global Sides */}
