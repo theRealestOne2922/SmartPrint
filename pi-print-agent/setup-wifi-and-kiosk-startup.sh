@@ -36,13 +36,50 @@
 
 set -euo pipefail
 
-TARGET_SSID="AB3SCOPE172 0783"
-KIOSK_URL="https://smartprintvit.web.app/kiosk-app"
+# There is more than one kiosk now, in different rooms and quite possibly on
+# different networks, so nothing here is hardcoded to the first one any more.
+# Pass them in, or answer the prompts:
+#
+#   sudo TARGET_SSID="Some Network" KIOSK_ID=ab3-scope bash setup-wifi-and-kiosk-startup.sh
+#
+# KIOSK_ID is what routes print jobs to THIS Pi's printer. It has to match the
+# KIOSK_ID in this Pi's pi-print-agent/.env exactly, and be listed in the
+# backend's ALLOWED_KIOSK_IDS — otherwise releases at this kiosk are rejected,
+# or worse, accepted and then claimed by nobody.
+TARGET_SSID="${TARGET_SSID:-}"
+KIOSK_ID="${KIOSK_ID:-}"
+KIOSK_BASE_URL="${KIOSK_BASE_URL:-https://smartprintvit.web.app/kiosk-app}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run this with sudo: sudo bash $0" >&2
   exit 1
 fi
+
+if [ -z "$TARGET_SSID" ]; then
+  read -r -p "[setup] WiFi network name (SSID) this Pi should lock to: " TARGET_SSID
+fi
+if [ -z "$TARGET_SSID" ]; then
+  echo "A network name is required." >&2
+  exit 1
+fi
+
+if [ -z "$KIOSK_ID" ]; then
+  read -r -p "[setup] Kiosk ID for this Pi (must match its .env KIOSK_ID): " KIOSK_ID
+fi
+if [ -z "$KIOSK_ID" ]; then
+  echo "A kiosk ID is required — without one this kiosk's jobs are claimed by no agent." >&2
+  exit 1
+fi
+
+# Anything needing quoting or escaping in a URL is a typo here, not a name.
+case "$KIOSK_ID" in
+  *[!A-Za-z0-9_-]*)
+    echo "KIOSK_ID may only contain letters, numbers, hyphens and underscores (got: '$KIOSK_ID')." >&2
+    exit 1
+    ;;
+esac
+
+KIOSK_URL="${KIOSK_BASE_URL}?kiosk=${KIOSK_ID}"
 
 REAL_USER="${SUDO_USER:-pi}"
 USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
@@ -54,6 +91,8 @@ WRAPPER_SCRIPT="$USER_HOME/kiosk.sh"
 
 echo "== SmartPrint Kiosk: WiFi lockdown + startup fix =="
 echo "Target network : $TARGET_SSID"
+echo "Kiosk ID       : $KIOSK_ID"
+echo "Kiosk URL      : $KIOSK_URL"
 echo "Kiosk user     : $REAL_USER ($USER_HOME)"
 echo
 

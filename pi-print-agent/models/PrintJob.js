@@ -15,6 +15,11 @@ const printJobSchema = new mongoose.Schema({
     pageRange: { type: String, default: 'all' },
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
+    // Which physical kiosk released this job. Written by the backend when the
+    // job moves to 'printing'; this agent only ever claims jobs whose kioskId
+    // matches its own KIOSK_ID. Must stay declared here or Mongoose would strip
+    // it on hydration and every job would look unrouted.
+    kioskId: { type: String, default: null },
     confidential: { type: Boolean, default: false },
     encrypted: { type: Boolean, default: false },
     // Envelope-encryption metadata written by the backend. These must stay

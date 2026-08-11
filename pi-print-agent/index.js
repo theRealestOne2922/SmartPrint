@@ -35,6 +35,25 @@ if (!mongoUri) {
     process.exit(1);
 }
 
+// Which physical kiosk this agent serves.
+//
+// More than one kiosk now shares this database, and every agent sees every
+// job: the change stream watches the whole collection. Without an identity of
+// its own an agent has no way to tell a job released at its own kiosk from one
+// released at the other, and the winner of that race is whichever agent's
+// claim lands first — which is to say, arbitrary. That is a confidential exam
+// paper coming out of an unattended tray on the wrong side of campus.
+//
+// Refusing to start is deliberate. An agent that guessed here would either
+// claim nothing (jobs pile up looking like a jammed printer) or claim
+// everything (the failure above), and both are far harder to notice than a
+// process that plainly will not come up.
+const KIOSK_ID = (process.env.KIOSK_ID || '').trim();
+if (!KIOSK_ID) {
+    console.error('Missing KIOSK_ID! Set it in .env to this kiosk\'s identifier (it must match the ?kiosk= value in this kiosk\'s browser URL, and be listed in the backend\'s ALLOWED_KIOSK_IDS).');
+    process.exit(1);
+}
+
 // Confidential document decryption (envelope: per-file DEK wrapped by MASTER_KEY)
 // Mirrors "student web app/server/security.ts" encryptFileEnvelope. The DEK is never
 // derived from job data (unlike the old sha256(teacherEmpId + jobId) scheme) — it only
@@ -347,6 +366,16 @@ async function claimJob(job) {
         {
             _id: job._id,
             status: 'printing',
+            // The routing decision belongs here, not only in the change-stream
+            // handler that called us. That handler reads a snapshot of the
+            // document from the moment its event was emitted; if a second
+            // release landed in the microseconds since, the snapshot is already
+            // wrong and the wrong kiosk would sail through it and win the
+            // claim. This filter re-reads the document as it actually is right
+            // now, inside the same atomic compare-and-swap that already keeps
+            // two agents from claiming one job — so a job stamped for the other
+            // kiosk matches nothing here, and this agent correctly backs off.
+            kioskId: KIOSK_ID,
             // Once CUPS has the file, paper is committed. Such a job is never
             // reclaimed, however stale the claim looks — reconcileSpooledJobs
             // finishes it off instead.
@@ -600,7 +629,11 @@ async function catchUpMissedJobs(quiet = false) {
     catchUpRunning = true;
     if (!quiet) console.log('[SYSTEM] Scanning for missed jobs...');
     try {
-        const jobs = await PrintJob.find({ status: 'printing' }).lean();
+        // Scoped to this kiosk, or a restart here would sweep up and print the
+        // other kiosk's outstanding jobs. Unlike the change-stream handler this
+        // reads live state rather than an event snapshot, which is what makes
+        // it a genuine safety net for an event this agent missed.
+        const jobs = await PrintJob.find({ status: 'printing', kioskId: KIOSK_ID }).lean();
 
         if (jobs && jobs.length > 0) {
             console.log(`[SYSTEM] Found ${jobs.length} job(s) awaiting print. Processing...`);
@@ -665,6 +698,11 @@ function startListener() {
         if (change.operationType === 'update' && change.fullDocument) {
             const job = change.fullDocument;
             if (job.status === 'printing') {
+                // Every agent sees every release, so most events belong to the
+                // other kiosk. This is only a cheap early exit on a snapshot —
+                // claimJob() is what actually decides ownership, against the
+                // live document.
+                if (job.kioskId !== KIOSK_ID) return;
                 console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
                 processJob(job);
             }
@@ -690,6 +728,12 @@ function startListener() {
 // them. The paper already came out, so record what actually happened.
 const SPOOL_SETTLE_MS = 2 * 60 * 1000;
 
+// Deliberately NOT scoped to this kiosk, unlike everything else that queries
+// by status. agentSpooledAt is only ever set by the agent that actually handed
+// the file to CUPS, so every job this matches has already printed somewhere —
+// finishing the record off can never cause a print, and either agent doing it
+// is correct. Left open so that a kiosk which is switched off for a day does
+// not leave phantom stuck jobs on the dashboard that only it could clear.
 async function reconcileSpooledJobs() {
     try {
         const cutoff = new Date(Date.now() - SPOOL_SETTLE_MS);
@@ -747,6 +791,29 @@ async function cleanupOldJobs() {
         const filter = { createdAt: { $lt: cutoffDate } };
         if (inFlight.length) filter._id = { $nin: inFlight };
 
+        // The activeJobs guard above only knows what THIS process is printing.
+        // With a second agent running the same cleanup on the same collection,
+        // the other kiosk's in-flight job looks from here like an ordinary
+        // expired record — and deleting it mid-print is exactly the failure
+        // that guard exists to prevent: the owning agent's completion write
+        // then lands on nothing and the job disappears from the dashboard as
+        // though it never ran. It takes a job old enough to expire that is only
+        // released now, which is rare and entirely possible.
+        //
+        // Deliberately NOT "claimed within the last N minutes". agentClaimedAt
+        // is written from the claiming Pi's own system clock, and a Pi with no
+        // RTC on a network that blocks NTP can be days out — the live one was
+        // 91 hours behind when this was written. Comparing another machine's
+        // timestamp against our own clock would read a claim made seconds ago
+        // as ancient, and delete the job out from under a printer mid-run.
+        //
+        // Status needs no clock to be true. A job at 'printing' is either in
+        // flight or genuinely stuck, and neither should be quietly deleted:
+        // reconcileSpooledJobs already retires the ones that reached the
+        // printer, and a stuck one is evidence of a problem worth seeing
+        // rather than something to tidy away.
+        filter.status = { $ne: 'printing' };
+
         const { deletedCount } = await PrintJob.deleteMany(filter);
 
         if (!deletedCount) {
@@ -782,6 +849,9 @@ async function sweepTempFiles() {
 console.log('=============================================');
 console.log('   SMARTPRINT: PI PRINT AGENT v4.2');
 console.log('   MongoDB Edition — no GhostScript');
+// With more than one kiosk on the same database, the first question of any log
+// you are reading is which one it came from.
+console.log(`   Kiosk: ${KIOSK_ID}`);
 console.log('=============================================');
 
 // Connect to MongoDB

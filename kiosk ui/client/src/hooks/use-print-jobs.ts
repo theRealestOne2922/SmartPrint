@@ -1,6 +1,7 @@
 // Kiosk Print Job Hooks — MongoDB Edition
 // All Supabase database calls replaced with Express API fetch().
 import { API_BASE } from "@/lib/api-config";
+import { getKioskId } from "@/lib/kiosk-id";
 // Mongoose returns camelCase fields, so the mapJob() function is simplified.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -119,6 +120,7 @@ export function useUpdatePrintJobStatus() {
 
   return useMutation({
     mutationFn: async ({ printId, status, releaseToken }: { printId: string; status: string; releaseToken?: string }) => {
+      const kioskId = getKioskId();
       // Update via Express API (was: supabase.from('print_jobs').update({ status }).eq('job_id', printId))
       const res = await fetch(`${API_BASE}/api/jobs/${printId}/status`, {
         method: 'PATCH',
@@ -126,7 +128,13 @@ export function useUpdatePrintJobStatus() {
         // print code alone was enough to cancel someone's job, or mark it
         // completed so it never printed, from anywhere.
         headers: { 'Content-Type': 'application/json', ...sessionHeader(printId) },
-        body: JSON.stringify({ status, releaseToken }),
+        // Which kiosk is releasing, so the job goes to the printer standing in
+        // front of whoever typed the code rather than to whichever agent
+        // happened to see the change first. Omitted entirely when this browser
+        // has no kiosk identity — that is the single-kiosk behaviour the one
+        // existing Pi still runs, and the server treats a missing kioskId as
+        // exactly that rather than rejecting it.
+        body: JSON.stringify({ status, releaseToken, ...(kioskId ? { kioskId } : {}) }),
       });
 
       if (!res.ok) {

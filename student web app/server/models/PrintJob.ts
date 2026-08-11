@@ -15,6 +15,7 @@ export interface IPrintJob {
   pageRange: string;
   price: number;
   status: string;
+  kioskId: string | null;
   confidential: boolean;
   integrity?: string | null;
   encrypted: boolean;
@@ -50,6 +51,12 @@ const printJobSchema = new Schema<IPrintJobDocument>(
     pageRange: { type: String, default: 'all' },
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
+    // Which physical kiosk released this job, written when status becomes
+    // 'printing'. Each Pi agent only claims jobs matching its own KIOSK_ID, so
+    // this is what routes a job to the printer at the location where the code
+    // was actually typed. Null on jobs released before this field existed, and
+    // on any release that doesn't send one — those stay single-kiosk behaviour.
+    kioskId: { type: String, default: null },
     confidential: { type: Boolean, default: false },
     // HMAC over the fields that decide who may print this job, so a row
     // edited straight in the database stops verifying. See signJobIntegrity.

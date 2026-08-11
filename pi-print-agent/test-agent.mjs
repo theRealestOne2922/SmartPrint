@@ -33,6 +33,10 @@ fs.writeFileSync(
 let mod;
 try {
   process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:1/never-connected';
+  // The agent refuses to start without a kiosk identity, and that check runs
+  // above the '// Startup' marker — so it is inside the harness and would take
+  // the whole suite down before the first test. Nothing under test reads it.
+  process.env.KIOSK_ID ||= 'test-kiosk';
   mod = await import(`file://${harness.replace(/\\/g, '/')}`);
 } finally {
   fs.unlinkSync(harness);

@@ -538,6 +538,25 @@ async function confidentialPrintingEnabled(): Promise<boolean> {
   return row?.value !== "false";
 }
 
+// Which kiosks are allowed to release a job.
+//
+// Each Pi agent only claims jobs stamped with its own KIOSK_ID, so a kioskId
+// that no agent answers to is a job that prints nowhere: it sits at "printing"
+// forever and looks, to anyone checking, exactly like a jammed printer. A typo
+// in one kiosk's URL should fail loudly at the release, not silently at the
+// tray.
+//
+// Deliberately the opposite default to ALLOWED_SIGNUP_DOMAINS above, which
+// falls OPEN when the list is empty. That is right for a policy setting and
+// wrong here: an empty list means no kiosk has been named yet, so nothing may
+// claim to be one. Requests that send no kioskId at all skip this check
+// entirely — that is what every kiosk does today, and it must keep working
+// untouched.
+const ALLOWED_KIOSK_IDS = (process.env.ALLOWED_KIOSK_IDS || "")
+  .split(",")
+  .map((k) => k.trim())
+  .filter(Boolean);
+
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -2104,6 +2123,18 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Unknown status." });
       }
 
+      // Which kiosk is releasing this. Optional: a request that omits it keeps
+      // the single-kiosk behaviour this system has always had, which is what
+      // every kiosk sends today and what the one existing Pi still expects.
+      // Only validated when it is actually present.
+      const rawKioskId = req.body.kioskId;
+      const kioskId = rawKioskId === undefined || rawKioskId === null ? null : asString(rawKioskId);
+      if (rawKioskId !== undefined && rawKioskId !== null) {
+        if (!kioskId || !ALLOWED_KIOSK_IDS.includes(kioskId)) {
+          return res.status(400).json({ message: "Unknown kiosk." });
+        }
+      }
+
       // Editing and deleting a job already required proof the print code had
       // been entered at a kiosk; changing its status did not, so the code on
       // its own was enough to cancel a colleague's job or mark it completed so
@@ -2115,6 +2146,9 @@ export async function registerRoutes(
 
       // Confidential jobs can only move to 'printing' with a valid,
       // server-issued release token (proof the faculty check passed).
+      // Declared out here because the success audit entry is written after the
+      // update below, not before it.
+      let hasConfidential = false;
       if (status === "printing") {
         // Nothing goes to the printer on a record we cannot vouch for. This
         // covers the case the release token cannot: a token is proof the
@@ -2138,7 +2172,7 @@ export async function registerRoutes(
           });
         }
 
-        const hasConfidential = await PrintJob.exists({ jobId: printId, confidential: true });
+        hasConfidential = !!(await PrintJob.exists({ jobId: printId, confidential: true }));
         if (hasConfidential && !verifyReleaseToken(printId, releaseToken)) {
           await AuditLog.create({
             event: "confidential_release",
@@ -2149,14 +2183,51 @@ export async function registerRoutes(
           }).catch(() => {});
           return res.status(403).json({ message: "Faculty verification required before releasing this job." });
         }
-        if (hasConfidential) {
-          await AuditLog.create({ event: "confidential_release", printId, ip: req.ip, success: true }).catch(() => {});
-        }
       }
 
-      const result = await PrintJob.updateMany({ jobId: printId }, { status });
+      // Releasing is the one transition that commits paper, so it is the one
+      // that must not be repeatable. With no precondition on the current
+      // status, a request that was merely slow — someone gave up on one kiosk
+      // and walked to the other — lands after the job has already printed and
+      // quietly flips it back to "printing", where it then sits forever. The
+      // agent's existing agentSpooledAt guard means no second sheet actually
+      // comes out, but the job looks stuck to everyone who checks it after.
+      //
+      // Only this transition is guarded; completed/failed/cancelled keep the
+      // behaviour they have always had. payment_confirmed is accepted because
+      // it is what the kiosk itself still treats as releasable — nothing
+      // writes it any more and no live record carries it, but gating on
+      // "uploaded" alone would strand any that ever did.
+      const filter: Record<string, unknown> = { jobId: printId };
+      const update: Record<string, unknown> = { status };
+      if (status === "printing") {
+        filter.status = { $in: ["uploaded", "payment_confirmed"] };
+        if (kioskId) update.kioskId = kioskId;
+      }
+
+      const result = await PrintJob.updateMany(filter, update);
       if (result.modifiedCount === 0) {
+        // The job may well exist and simply have moved on already — released
+        // at the other kiosk while this request was in flight. Answering "not
+        // found" would be actively misleading to whoever is standing there.
+        if (status === "printing" && (await PrintJob.exists({ jobId: printId }))) {
+          return res.status(409).json({ message: "This job has already been released." });
+        }
         return res.status(404).json({ message: "Print job not found" });
+      }
+
+      // Only now has the release actually happened. Writing this before the
+      // update meant a request that lost the race above still left behind an
+      // audit entry claiming it had successfully released a confidential exam
+      // paper — the one record that is supposed to be trustworthy.
+      if (hasConfidential) {
+        await AuditLog.create({
+          event: "confidential_release",
+          printId,
+          ip: req.ip,
+          success: true,
+          detail: kioskId ? `released at kiosk ${kioskId}` : undefined,
+        }).catch(() => {});
       }
 
       const updatedJobs = await PrintJob.find({ jobId: printId }).lean();

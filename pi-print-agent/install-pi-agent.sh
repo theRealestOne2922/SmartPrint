@@ -230,6 +230,11 @@ const printJobSchema = new mongoose.Schema({
     pageRange: { type: String, default: 'all' },
     price: { type: Number, required: true },
     status: { type: String, required: true, default: 'uploaded' },
+    // Which physical kiosk released this job. Written by the backend when the
+    // job moves to 'printing'; this agent only ever claims jobs whose kioskId
+    // matches its own KIOSK_ID. Must stay declared here or Mongoose would strip
+    // it on hydration and every job would look unrouted.
+    kioskId: { type: String, default: null },
     confidential: { type: Boolean, default: false },
     encrypted: { type: Boolean, default: false },
     // Envelope-encryption metadata written by the backend. These must stay
@@ -302,6 +307,10 @@ fs.writeFileSync(
 let mod;
 try {
   process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:1/never-connected';
+  // The agent refuses to start without a kiosk identity, and that check runs
+  // above the '// Startup' marker — so it is inside the harness and would take
+  // the whole suite down before the first test. Nothing under test reads it.
+  process.env.KIOSK_ID ||= 'test-kiosk';
   mod = await import(`file://${harness.replace(/\\/g, '/')}`);
 } finally {
   fs.unlinkSync(harness);
@@ -561,6 +570,25 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
     console.error('Missing MONGODB_URI! Please check your .env file.');
+    process.exit(1);
+}
+
+// Which physical kiosk this agent serves.
+//
+// More than one kiosk now shares this database, and every agent sees every
+// job: the change stream watches the whole collection. Without an identity of
+// its own an agent has no way to tell a job released at its own kiosk from one
+// released at the other, and the winner of that race is whichever agent's
+// claim lands first — which is to say, arbitrary. That is a confidential exam
+// paper coming out of an unattended tray on the wrong side of campus.
+//
+// Refusing to start is deliberate. An agent that guessed here would either
+// claim nothing (jobs pile up looking like a jammed printer) or claim
+// everything (the failure above), and both are far harder to notice than a
+// process that plainly will not come up.
+const KIOSK_ID = (process.env.KIOSK_ID || '').trim();
+if (!KIOSK_ID) {
+    console.error('Missing KIOSK_ID! Set it in .env to this kiosk\'s identifier (it must match the ?kiosk= value in this kiosk\'s browser URL, and be listed in the backend\'s ALLOWED_KIOSK_IDS).');
     process.exit(1);
 }
 
@@ -876,6 +904,16 @@ async function claimJob(job) {
         {
             _id: job._id,
             status: 'printing',
+            // The routing decision belongs here, not only in the change-stream
+            // handler that called us. That handler reads a snapshot of the
+            // document from the moment its event was emitted; if a second
+            // release landed in the microseconds since, the snapshot is already
+            // wrong and the wrong kiosk would sail through it and win the
+            // claim. This filter re-reads the document as it actually is right
+            // now, inside the same atomic compare-and-swap that already keeps
+            // two agents from claiming one job — so a job stamped for the other
+            // kiosk matches nothing here, and this agent correctly backs off.
+            kioskId: KIOSK_ID,
             // Once CUPS has the file, paper is committed. Such a job is never
             // reclaimed, however stale the claim looks — reconcileSpooledJobs
             // finishes it off instead.
@@ -1129,7 +1167,11 @@ async function catchUpMissedJobs(quiet = false) {
     catchUpRunning = true;
     if (!quiet) console.log('[SYSTEM] Scanning for missed jobs...');
     try {
-        const jobs = await PrintJob.find({ status: 'printing' }).lean();
+        // Scoped to this kiosk, or a restart here would sweep up and print the
+        // other kiosk's outstanding jobs. Unlike the change-stream handler this
+        // reads live state rather than an event snapshot, which is what makes
+        // it a genuine safety net for an event this agent missed.
+        const jobs = await PrintJob.find({ status: 'printing', kioskId: KIOSK_ID }).lean();
 
         if (jobs && jobs.length > 0) {
             console.log(`[SYSTEM] Found ${jobs.length} job(s) awaiting print. Processing...`);
@@ -1194,6 +1236,11 @@ function startListener() {
         if (change.operationType === 'update' && change.fullDocument) {
             const job = change.fullDocument;
             if (job.status === 'printing') {
+                // Every agent sees every release, so most events belong to the
+                // other kiosk. This is only a cheap early exit on a snapshot —
+                // claimJob() is what actually decides ownership, against the
+                // live document.
+                if (job.kioskId !== KIOSK_ID) return;
                 console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
                 processJob(job);
             }
@@ -1219,6 +1266,12 @@ function startListener() {
 // them. The paper already came out, so record what actually happened.
 const SPOOL_SETTLE_MS = 2 * 60 * 1000;
 
+// Deliberately NOT scoped to this kiosk, unlike everything else that queries
+// by status. agentSpooledAt is only ever set by the agent that actually handed
+// the file to CUPS, so every job this matches has already printed somewhere —
+// finishing the record off can never cause a print, and either agent doing it
+// is correct. Left open so that a kiosk which is switched off for a day does
+// not leave phantom stuck jobs on the dashboard that only it could clear.
 async function reconcileSpooledJobs() {
     try {
         const cutoff = new Date(Date.now() - SPOOL_SETTLE_MS);
@@ -1276,6 +1329,29 @@ async function cleanupOldJobs() {
         const filter = { createdAt: { $lt: cutoffDate } };
         if (inFlight.length) filter._id = { $nin: inFlight };
 
+        // The activeJobs guard above only knows what THIS process is printing.
+        // With a second agent running the same cleanup on the same collection,
+        // the other kiosk's in-flight job looks from here like an ordinary
+        // expired record — and deleting it mid-print is exactly the failure
+        // that guard exists to prevent: the owning agent's completion write
+        // then lands on nothing and the job disappears from the dashboard as
+        // though it never ran. It takes a job old enough to expire that is only
+        // released now, which is rare and entirely possible.
+        //
+        // Deliberately NOT "claimed within the last N minutes". agentClaimedAt
+        // is written from the claiming Pi's own system clock, and a Pi with no
+        // RTC on a network that blocks NTP can be days out — the live one was
+        // 91 hours behind when this was written. Comparing another machine's
+        // timestamp against our own clock would read a claim made seconds ago
+        // as ancient, and delete the job out from under a printer mid-run.
+        //
+        // Status needs no clock to be true. A job at 'printing' is either in
+        // flight or genuinely stuck, and neither should be quietly deleted:
+        // reconcileSpooledJobs already retires the ones that reached the
+        // printer, and a stuck one is evidence of a problem worth seeing
+        // rather than something to tidy away.
+        filter.status = { $ne: 'printing' };
+
         const { deletedCount } = await PrintJob.deleteMany(filter);
 
         if (!deletedCount) {
@@ -1311,6 +1387,9 @@ async function sweepTempFiles() {
 console.log('=============================================');
 console.log('   SMARTPRINT: PI PRINT AGENT v4.2');
 console.log('   MongoDB Edition — no GhostScript');
+// With more than one kiosk on the same database, the first question of any log
+// you are reading is which one it came from.
+console.log(`   Kiosk: ${KIOSK_ID}`);
 console.log('=============================================');
 
 // Connect to MongoDB
@@ -1583,6 +1662,15 @@ PUBLIC_BASE_URL=
 # cannot stop an exam morning.
 APP_SECRET=
 
+# Which kiosk this Pi is. REQUIRED — the agent refuses to start without it.
+#
+# More than one kiosk shares this database and every agent sees every job, so
+# this is what decides which printer a released job actually comes out of. It
+# must match the ?kiosk= value in this Pi's kiosk URL, and be listed in the
+# backend's ALLOWED_KIOSK_IDS. Each Pi gets its OWN value — copying another
+# kiosk's here would have both printers racing for the same documents.
+KIOSK_ID=
+
 # Hours to retain completed jobs before cleanup (default 24)
 CLEANUP_HOURS=24
 EOF
@@ -1606,6 +1694,18 @@ if [ -f "$INSTALL_DIR/.env" ]; then
         echo "    It must match the backend's MASTER_KEY exactly (64 hex chars)."
         echo ""
     fi
+    # An agent upgraded from the single-kiosk version has no KIOSK_ID and will
+    # now refuse to start. Say so here rather than letting it look like the
+    # upgrade broke the Pi.
+    if ! grep -qE '^KIOSK_ID=.+' "$INSTALL_DIR/.env"; then
+        echo ""
+        echo "⛔ KIOSK_ID is missing from $INSTALL_DIR/.env"
+        echo "    The agent will NOT START until you add it. Set it to this"
+        echo "    kiosk's identifier — it must match the ?kiosk= value in this"
+        echo "    Pi's kiosk URL and be listed in the backend's ALLOWED_KIOSK_IDS."
+        echo "    Each Pi needs its OWN value; two kiosks sharing one would race."
+        echo ""
+    fi
 else
     echo "🔑 Writing .env template (you must fill it in before the agent runs)..."
     cat << 'EOF' > "$INSTALL_DIR/.env"
@@ -1616,6 +1716,34 @@ MONGODB_URI=
 # this is what unwraps the key for confidential documents. If it differs,
 # confidential jobs fail to decrypt and will not print.
 MASTER_KEY=
+
+# Which kiosk this Pi is. REQUIRED — the agent refuses to start without it.
+#
+# More than one kiosk shares this database and every agent sees every job, so
+# this is what decides which printer a released job actually comes out of. It
+# must match the ?kiosk= value in this Pi's kiosk URL, and be listed in the
+# backend's ALLOWED_KIOSK_IDS. Each Pi gets its OWN value — copying another
+# kiosk's here would have both printers racing for the same documents.
+KIOSK_ID=
+
+# Where documents may be fetched from, e.g. https://api.example.edu
+# Must match the backend's PUBLIC_BASE_URL.
+#
+# This agent takes its work straight from MongoDB and never asks the API, so
+# none of the server's checks apply to it. Without this, a job row written
+# directly into the database could point the agent at any URL at all — and it
+# runs inside the campus network. Private and loopback addresses are refused
+# either way, but set this so only our own server is accepted.
+PUBLIC_BASE_URL=
+
+# Must match the backend's APP_SECRET.
+#
+# The server signs the fields that decide who may print a job. With this set,
+# the agent refuses a record whose signature does not match — so altering a job
+# in the database does not get it printed. Left blank, jobs still print and the
+# agent warns at startup; it is not a hard requirement, so a missed variable
+# cannot stop an exam morning.
+APP_SECRET=
 
 # Hours to retain completed jobs before cleanup (default 24)
 CLEANUP_HOURS=24
