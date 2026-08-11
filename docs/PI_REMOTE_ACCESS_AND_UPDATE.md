@@ -46,16 +46,27 @@ Use **the same account** you will use on your laptop.
 
 `--ssh` lets Tailscale handle SSH auth, so you don't have to manage keys.
 
-**Set `--hostname` and make it specific.** There is more than one SmartPrint
-Pi on this account — the other one runs a different college's deployment. Two
-devices both called `raspberrypi` in the admin console is how you end up
-restarting the wrong printer, or worse, pointing the wrong agent at the wrong
-database. Name them for the deployment: `vit-print-pi`, `amet-print-pi`.
+**Set `--hostname` and make it specific.** There is more than one SmartPrint Pi
+on this account, and as of the two-kiosk rollout there are three: two VIT
+kiosks and one running a different college's deployment. Devices called
+`raspberrypi` in the admin console are how you end up restarting the wrong
+printer, or worse, pointing the wrong agent at the wrong database.
+
+| Machine | Tailscale hostname | `KIOSK_ID` in its `.env` |
+|---|---|---|
+| VIT kiosk A (the original Pi) | `pi-a-vit` | `pi-a-vit` |
+| VIT kiosk B (added second) | `pi-b-vit` | `pi-b-vit` |
+| The other college's Pi | `amet-print-pi` | — separate deployment |
+
+The hostname and the `KIOSK_ID` are deliberately the same string. They are
+different systems that have to agree — one names the machine, the other routes
+print jobs to it — and giving them one value each removes a way for them to
+drift apart.
 
 If the Pi is already up with the wrong name, change it without re-authenticating:
 
 ```bash
-sudo tailscale up --ssh --hostname=vit-print-pi --reset
+sudo tailscale up --ssh --hostname=pi-a-vit --reset
 ```
 
 > A name is a label, and labels can be wrong. Before running anything that
@@ -89,7 +100,7 @@ install, and sign in with the same account.
 From PowerShell:
 
 ```powershell
-ssh pi@vit-print-pi
+ssh pi@pi-a-vit
 ```
 
 MagicDNS resolves the hostname you set, so you do not have to remember the
@@ -112,9 +123,22 @@ that "on the tailnet" currently means "can SSH to both printers".
 
 ## Part 2 — Confirm which Pi you are on, before changing anything
 
-Two Pis, two colleges, identical operating systems, identical paths, identical
-agent. Over SSH they are indistinguishable, and a Tailscale name is a label
-someone can set to anything.
+Three Pis, two colleges, identical operating systems, identical paths,
+identical agent. Over SSH they are indistinguishable, and a Tailscale name is a
+label someone can set to anything.
+
+**Two different questions, two different checks — do not confuse them:**
+
+| Question | How to answer it |
+|---|---|
+| Which **college's** deployment is this? | `whichdeployment.mjs` (below) |
+| Which **VIT kiosk** is this, A or B? | `grep KIOSK_ID ~/smartprint-agent/.env` |
+
+`whichdeployment.mjs` fingerprints `MASTER_KEY`, and **both VIT Pis share one
+`MASTER_KEY`** — they are the same deployment. It will report `CONFIRMED` on
+either of them, which is correct and is exactly why it cannot tell you whether
+you are on kiosk A or kiosk B. Use it to be sure you are not on the other
+college's machine; use `KIOSK_ID` to tell the two VIT kiosks apart.
 
 **Run this first, every time, before any change:**
 

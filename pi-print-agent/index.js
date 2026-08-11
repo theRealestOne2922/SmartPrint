@@ -14,6 +14,7 @@ import util from 'util';
 import https from 'https';
 import http from 'http';
 import crypto from 'crypto';
+import os from 'os';
 
 import { PrintJob } from './models/PrintJob.js';
 
@@ -622,6 +623,48 @@ async function processJob(job) {
     }
 }
 
+// Two Pis answering to the same KIOSK_ID is the one misconfiguration this
+// design cannot defend against on its own. Both agents would consider every job
+// at that kiosk theirs, claimJob() would hand each document to whichever got
+// there first, and papers would surface at effectively random locations — the
+// exact failure kioskId exists to prevent, wearing none of its symptoms.
+//
+// It is also the easy mistake to make. Standing up the second Pi means copying
+// MONGODB_URI, MASTER_KEY, APP_SECRET and PUBLIC_BASE_URL over from the first,
+// and copying the whole .env rather than those four lines brings KIOSK_ID along
+// with them.
+//
+// So each agent records which machine is behind its kiosk id, and finding a
+// different one there means two hosts are sharing one id. Deliberately not
+// time-windowed: lastSeen is stamped by MongoDB's own clock precisely because
+// the Pis' clocks cannot be trusted against each other, and any live-vs-stale
+// judgement would need exactly that comparison. A Pi that was simply renamed
+// warns once, re-registers, and is quiet from then on; two Pis genuinely
+// sharing an id keep warning at every sweep, which is the point.
+async function registerKiosk() {
+    try {
+        const agents = mongoose.connection.db.collection('kioskagents');
+        const hostname = os.hostname();
+        const existing = await agents.findOne({ _id: KIOSK_ID });
+        if (existing && existing.hostname && existing.hostname !== hostname) {
+            console.error('='.repeat(72));
+            console.error(`[SYSTEM] ⛔ KIOSK ID CONFLICT — '${KIOSK_ID}' is also in use by host '${existing.hostname}'`);
+            console.error(`[SYSTEM]    This host is '${hostname}'. Two agents sharing one kiosk id will`);
+            console.error('[SYSTEM]    print each other\'s jobs at the wrong location, including');
+            console.error('[SYSTEM]    confidential ones. Give each Pi its own KIOSK_ID in .env and its');
+            console.error('[SYSTEM]    own ?kiosk= in the kiosk URL, then restart both agents.');
+            console.error('='.repeat(72));
+        }
+        await agents.updateOne(
+            { _id: KIOSK_ID },
+            { $set: { hostname }, $currentDate: { lastSeen: true } },
+            { upsert: true }
+        );
+    } catch (err) {
+        console.warn('[SYSTEM] Could not record this kiosk\'s identity:', err.message);
+    }
+}
+
 let catchUpRunning = false;
 
 async function catchUpMissedJobs(quiet = false) {
@@ -653,6 +696,11 @@ async function catchUpMissedJobs(quiet = false) {
         if (unrouted > 0) {
             console.warn(`[SYSTEM] ⚠️  ${unrouted} job(s) are stuck at 'printing' with no kiosk id — no agent will ever claim them. A kiosk is missing ?kiosk= in its URL.`);
         }
+
+        // Re-checked on every sweep, not just at startup: the second Pi is
+        // usually configured while the first is already running, so the
+        // conflict appears after this one booted.
+        await registerKiosk();
     } catch (err) {
         console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
     } finally {
@@ -883,6 +931,10 @@ try {
     console.error('❌ MongoDB connection failed:', err.message);
     process.exit(1);
 }
+
+// Claim this kiosk id before doing any work, so a second Pi wearing the same
+// identity is called out at boot rather than at the printer.
+await registerKiosk();
 
 // Check LibreOffice
 try {
