@@ -441,6 +441,15 @@ const SENSITIVE_JOB_FIELDS = [
   "wrappedKey",
   "wrappedKeyIv",
   "wrappedKeyAuthTag",
+  // Which physical kiosk a job was released at. This list is a denylist, so a
+  // new schema field is public by default — and a print code alone would have
+  // been enough to learn where a confidential paper is coming out, which is the
+  // one thing worth knowing if you intend to be standing there when it does.
+  // The lookup deliberately withholds a confidential job's file name from
+  // anyone without a release token; handing out its collection point instead
+  // would give that away again. Nothing on any client reads it: the kiosk only
+  // ever sends it, and the Pi reads it from the database, not the API.
+  "kioskId",
 ];
 
 export function sanitizeJob<T extends Record<string, any>>(job: T): T {

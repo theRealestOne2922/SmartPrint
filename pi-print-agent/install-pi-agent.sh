@@ -36,6 +36,34 @@ fi
 USER_HOME=$(eval echo "~$REAL_USER")
 INSTALL_DIR="$USER_HOME/smartprint-agent"
 
+# Which kiosk this Pi is. More than one kiosk shares one database, and a job is
+# routed to a printer by the kiosk id the browser sends — so the id belongs in
+# the autostart URL this script writes, not only in .env. Without it the kiosk
+# releases jobs that no agent will claim: the release succeeds, and the job then
+# sits at 'printing' with nothing to show for it.
+#
+#   sudo KIOSK_ID=ab3-scope bash install-pi-agent.sh
+#
+# Left unset the installer still runs and writes today's single-kiosk URL, so an
+# existing single-kiosk Pi is not broken by the omission — but it warns, loudly,
+# at the end.
+KIOSK_ID="${KIOSK_ID:-}"
+case "$KIOSK_ID" in
+    *[!A-Za-z0-9_-]*)
+        echo "❌ ERROR: KIOSK_ID may only contain letters, numbers, hyphens and underscores (got: '$KIOSK_ID')."
+        exit 1
+        ;;
+esac
+
+KIOSK_BASE_URL="${KIOSK_BASE_URL:-https://smartprintvit.web.app/kiosk-app}"
+if [ -n "$KIOSK_ID" ]; then
+    KIOSK_URL="${KIOSK_BASE_URL}?kiosk=${KIOSK_ID}"
+else
+    KIOSK_URL="$KIOSK_BASE_URL"
+fi
+
+CHROMIUM_FLAGS="--noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate"
+
 # Print modern installer banner
 clear
 echo "==================================================================="
@@ -1181,6 +1209,16 @@ async function catchUpMissedJobs(quiet = false) {
         } else if (!quiet) {
             console.log('[SYSTEM] No missed jobs. Queue is clean.');
         }
+
+        // Jobs nobody can claim. These are invisible everywhere else: the
+        // release succeeded, so the kiosk moved on, and every agent skips them
+        // for the same reason. Surfacing them on the sweep means a kiosk left
+        // on the wrong URL shows up in `pm2 logs` within five minutes instead
+        // of being discovered by someone wondering where their exam paper went.
+        const unrouted = await PrintJob.countDocuments({ status: 'printing', kioskId: null });
+        if (unrouted > 0) {
+            console.warn(`[SYSTEM] ⚠️  ${unrouted} job(s) are stuck at 'printing' with no kiosk id — no agent will ever claim them. A kiosk is missing ?kiosk= in its URL.`);
+        }
     } catch (err) {
         console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
     } finally {
@@ -1240,7 +1278,18 @@ function startListener() {
                 // other kiosk. This is only a cheap early exit on a snapshot —
                 // claimJob() is what actually decides ownership, against the
                 // live document.
-                if (job.kioskId !== KIOSK_ID) return;
+                if (job.kioskId !== KIOSK_ID) {
+                    // A job stamped for the other kiosk is the normal case and
+                    // stays quiet. A job stamped for NO kiosk is a
+                    // misconfiguration — a browser still on a URL with no
+                    // ?kiosk= — and no agent anywhere will claim it. Without
+                    // this line that failure is completely invisible: the
+                    // release returns 200 and the job simply never prints.
+                    if (!job.kioskId) {
+                        console.warn(`[REALTIME] Job ${job.jobId} was released with NO kiosk id — no agent will claim it. The kiosk that released it is missing ?kiosk= in its URL.`);
+                    }
+                    return;
+                }
                 console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
                 processJob(job);
             }
@@ -1750,6 +1799,30 @@ CLEANUP_HOURS=24
 EOF
 fi
 
+# Keep .env and the autostart URL saying the same thing. If they disagree, the
+# browser stamps jobs for one kiosk and the agent only claims the other's — the
+# release succeeds and nothing ever prints. Never overwrites an id that is
+# already filled in.
+if [ -n "$KIOSK_ID" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    if grep -qE '^KIOSK_ID=.+' "$INSTALL_DIR/.env"; then
+        EXISTING_KIOSK_ID=$(grep -E '^KIOSK_ID=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2-)
+        if [ "$EXISTING_KIOSK_ID" != "$KIOSK_ID" ]; then
+            echo ""
+            echo "⚠️  .env already has KIOSK_ID=$EXISTING_KIOSK_ID but you passed KIOSK_ID=$KIOSK_ID"
+            echo "    Leaving .env alone. The kiosk URL just written uses '$KIOSK_ID',"
+            echo "    so these now DISAGREE and this kiosk's jobs will not print."
+            echo "    Make them match before starting the agent."
+            echo ""
+        fi
+    elif grep -qE '^KIOSK_ID=' "$INSTALL_DIR/.env"; then
+        sed -i "s|^KIOSK_ID=|KIOSK_ID=$KIOSK_ID|" "$INSTALL_DIR/.env"
+        echo "🔑 KIOSK_ID set to '$KIOSK_ID' in .env"
+    else
+        printf '\n# Which kiosk this Pi is (added by the installer).\nKIOSK_ID=%s\n' "$KIOSK_ID" >> "$INSTALL_DIR/.env"
+        echo "🔑 KIOSK_ID=$KIOSK_ID appended to existing .env"
+    fi
+fi
+
 echo "✅ App files successfully written to $INSTALL_DIR"
 echo ""
 
@@ -1818,11 +1891,11 @@ echo "🖥️  [8/9] Configuring Chromium Kiosk mode on startup..."
 # 1. Standard XDG Desktop entry autostart (works on Openbox/LXDE X11 and some Wayland environments)
 AUTOSTART_DIR="$USER_HOME/.config/autostart"
 mkdir -p "$AUTOSTART_DIR"
-cat << 'EOF' > "$AUTOSTART_DIR/smartprint-kiosk.desktop"
+cat << EOF > "$AUTOSTART_DIR/smartprint-kiosk.desktop"
 [Desktop Entry]
 Type=Application
 Name=SmartPrint Kiosk
-Exec=chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app
+Exec=chromium-browser $CHROMIUM_FLAGS $KIOSK_URL
 X-GNOME-Autostart-enabled=true
 EOF
 
@@ -1834,9 +1907,9 @@ if [ -f "$WAYFIRE_INI" ] || [ -d "$USER_HOME/.config" ]; then
     touch "$WAYFIRE_INI"
     if ! grep -q "smartprintvit.web.app" "$WAYFIRE_INI"; then
         if grep -q "^\[autostart\]" "$WAYFIRE_INI"; then
-            sed -i '/^\[autostart\]/a smartprint_kiosk = chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app' "$WAYFIRE_INI"
+            sed -i "/^\[autostart\]/a smartprint_kiosk = chromium-browser $CHROMIUM_FLAGS $KIOSK_URL" "$WAYFIRE_INI"
         else
-            echo -e "\n[autostart]\nsmartprint_kiosk = chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app" >> "$WAYFIRE_INI"
+            echo -e "\n[autostart]\nsmartprint_kiosk = chromium-browser $CHROMIUM_FLAGS $KIOSK_URL" >> "$WAYFIRE_INI"
         fi
     fi
 fi
@@ -1846,11 +1919,11 @@ LABWC_DIR="$USER_HOME/.config/labwc"
 mkdir -p "$LABWC_DIR"
 if [ -f "$LABWC_DIR/autostart" ]; then
     if ! grep -q "smartprintvit.web.app" "$LABWC_DIR/autostart"; then
-        echo "chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app &" >> "$LABWC_DIR/autostart"
+        echo "chromium-browser $CHROMIUM_FLAGS $KIOSK_URL &" >> "$LABWC_DIR/autostart"
     fi
 else
     echo "#!/bin/sh" > "$LABWC_DIR/autostart"
-    echo "chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app &" >> "$LABWC_DIR/autostart"
+    echo "chromium-browser $CHROMIUM_FLAGS $KIOSK_URL &" >> "$LABWC_DIR/autostart"
     chmod +x "$LABWC_DIR/autostart"
 fi
 
@@ -1859,13 +1932,13 @@ LXDE_DIR="$USER_HOME/.config/lxsession/LXDE-pi"
 mkdir -p "$LXDE_DIR"
 if [ -f "$LXDE_DIR/autostart" ]; then
     if ! grep -q "smartprintvit.web.app" "$LXDE_DIR/autostart"; then
-        echo "@chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app" >> "$LXDE_DIR/autostart"
+        echo "@chromium-browser $CHROMIUM_FLAGS $KIOSK_URL" >> "$LXDE_DIR/autostart"
     fi
 else
     if [ -f "/etc/xdg/lxsession/LXDE-pi/autostart" ]; then
         cp /etc/xdg/lxsession/LXDE-pi/autostart "$LXDE_DIR/autostart"
     fi
-    echo "@chromium-browser --noerrdialogs --disable-infobars --kiosk --disable-session-crashed-bubble --disable-features=Translate https://smartprintvit.web.app/kiosk-app" >> "$LXDE_DIR/autostart"
+    echo "@chromium-browser $CHROMIUM_FLAGS $KIOSK_URL" >> "$LXDE_DIR/autostart"
 fi
 
 # Restore full ownership of user configuration files and directories
@@ -1938,9 +2011,26 @@ echo "  Restart agent with:        pm2 restart smartprint-agent"
 echo ""
 echo "🖥️  KIOSK INTERFACE CONFIGURATION:"
 echo "  - Chromium is set to autostart directly into the kiosk site:"
-echo "    https://smartprintvit.web.app/kiosk-app"
+echo "    $KIOSK_URL"
 echo "  - Full-screen and auto-restores on boot are enabled."
 echo "  - Screen sleep/blanking is completely disabled."
 echo "  - Just reboot your Raspberry Pi to see it launch automatically!"
 echo "==================================================================="
 echo ""
+
+if [ -z "$KIOSK_ID" ]; then
+    echo "⚠️  NO KIOSK_ID WAS GIVEN"
+    echo ""
+    echo "    The kiosk URL above carries no ?kiosk= identifier, and .env has no"
+    echo "    KIOSK_ID — so the agent will refuse to start, and releases made at"
+    echo "    this kiosk would be claimed by no agent at all."
+    echo ""
+    echo "    That is fine only if this really is a single-kiosk deployment with"
+    echo "    an older agent. Otherwise re-run with an id:"
+    echo ""
+    echo "      sudo KIOSK_ID=<name-for-this-kiosk> bash install-pi-agent.sh"
+    echo ""
+    echo "    The same id must appear in the backend's ALLOWED_KIOSK_IDS."
+    echo "==================================================================="
+    echo ""
+fi

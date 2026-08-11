@@ -28,6 +28,7 @@ export function JobConfirmationScreen() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [facultyIdInput, setFacultyIdInput] = useState("");
   const [authError, setAuthError] = useState("");
+  const [releaseError, setReleaseError] = useState("");
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -114,8 +115,28 @@ export function JobConfirmationScreen() {
   };
 
   const executeRelease = () => {
+    setReleaseError("");
     updateStatusMutation.mutate({ printId, status: 'printing', releaseToken: releaseToken || undefined }, {
-      onSuccess: () => setLocation(`/printing/${printId}`)
+      onSuccess: () => setLocation(`/printing/${printId}`),
+      // A rejected release used to do nothing at all: the button simply
+      // un-greyed itself and the screen sat there. Someone pressing it again
+      // and again, with no idea why nothing was happening, is the worst way to
+      // find out a kiosk is misconfigured. Every one of these is recoverable
+      // by a person standing at the machine, so say which it is.
+      onError: (err: Error) => {
+        const msg = err?.message || "";
+        if (/already been released/i.test(msg)) {
+          setReleaseError("This job has already been released — check the other kiosk.");
+        } else if (/unknown kiosk/i.test(msg)) {
+          setReleaseError("This kiosk is not set up correctly. Please tell the print desk.");
+        } else if (/verification required/i.test(msg)) {
+          setReleaseError("Faculty verification is required before releasing this job.");
+        } else if (/re-issue/i.test(msg)) {
+          setReleaseError("This job cannot be printed. Please ask the print desk to re-issue it.");
+        } else {
+          setReleaseError(msg || "Could not release this job. Please try again.");
+        }
+      },
     });
   };
 
@@ -259,6 +280,12 @@ export function JobConfirmationScreen() {
             ))}
           </div>
         </div>
+
+        {releaseError && (
+          <p className="shrink-0 text-center text-red-600 font-bold text-xl mb-2" data-testid="release-error">
+            {releaseError}
+          </p>
+        )}
 
         <div className="flex gap-4 shrink-0 pb-4">
           <button

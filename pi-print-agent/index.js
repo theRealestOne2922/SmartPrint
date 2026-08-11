@@ -643,6 +643,16 @@ async function catchUpMissedJobs(quiet = false) {
         } else if (!quiet) {
             console.log('[SYSTEM] No missed jobs. Queue is clean.');
         }
+
+        // Jobs nobody can claim. These are invisible everywhere else: the
+        // release succeeded, so the kiosk moved on, and every agent skips them
+        // for the same reason. Surfacing them on the sweep means a kiosk left
+        // on the wrong URL shows up in `pm2 logs` within five minutes instead
+        // of being discovered by someone wondering where their exam paper went.
+        const unrouted = await PrintJob.countDocuments({ status: 'printing', kioskId: null });
+        if (unrouted > 0) {
+            console.warn(`[SYSTEM] ⚠️  ${unrouted} job(s) are stuck at 'printing' with no kiosk id — no agent will ever claim them. A kiosk is missing ?kiosk= in its URL.`);
+        }
     } catch (err) {
         console.error('[SYSTEM] Failed to fetch missed jobs:', err.message);
     } finally {
@@ -702,7 +712,18 @@ function startListener() {
                 // other kiosk. This is only a cheap early exit on a snapshot —
                 // claimJob() is what actually decides ownership, against the
                 // live document.
-                if (job.kioskId !== KIOSK_ID) return;
+                if (job.kioskId !== KIOSK_ID) {
+                    // A job stamped for the other kiosk is the normal case and
+                    // stays quiet. A job stamped for NO kiosk is a
+                    // misconfiguration — a browser still on a URL with no
+                    // ?kiosk= — and no agent anywhere will claim it. Without
+                    // this line that failure is completely invisible: the
+                    // release returns 200 and the job simply never prints.
+                    if (!job.kioskId) {
+                        console.warn(`[REALTIME] Job ${job.jobId} was released with NO kiosk id — no agent will claim it. The kiosk that released it is missing ?kiosk= in its URL.`);
+                    }
+                    return;
+                }
                 console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
                 processJob(job);
             }
