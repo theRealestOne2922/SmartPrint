@@ -161,11 +161,41 @@ Copy **only** these from kiosk A, byte-identical:
 A `MASTER_KEY` that differs by one character means confidential jobs download
 as ciphertext and never print.
 
-### 3.3 Printer, network, remote access, clock
+### 3.3 Printer — Canon imageFORCE 6170
+
+**Connect it over the network, not USB.** This is a networked office MFP and it
+speaks IPP Everywhere / AirPrint / Mopria natively, which is the one path that
+needs no vendor driver at all. `setup-printer.sh` already tries `-m everywhere`
+first, so a network URI gets you a working queue with nothing to install.
+
+Get its IP from the printer's own control panel, check the Pi can see it, then:
 
 ```bash
-sudo bash setup-printer.sh
+sudo bash setup-printer.sh <printer-ip>
 ```
+
+**Trays.** The agent never names a tray — it asks for `media=a4` or `media=a3`
+and lets the printer choose. That works only if the printer's own paper
+settings agree with the labels on the front (tray 1 → A4, tray 2 → A3). If
+tray 2 is left on "Auto" or the wrong size, A3 booklets either fail outright or
+come out on A4. Set the tray sizes on the printer's panel and confirm before
+calling the install done.
+
+**If driverless somehow fails**, Canon does publish a Linux UFR II driver — but
+only for 64-bit ARM, not 32-bit. Check what the Pi is running first:
+
+```bash
+uname -m
+```
+
+`aarch64` → the Debian **arm64** UFR II package is a viable fallback.
+`armv7l` → there is no Canon driver for this Pi at all; driverless is the only
+option, and re-imaging with 64-bit Raspberry Pi OS is the fix.
+
+Do not spend time hunting for a driver before trying driverless. On this
+printer it is the supported route, not a workaround.
+
+### 3.3b Network, remote access, clock
 
 ```bash
 sudo TARGET_SSID="<kiosk B's network>" KIOSK_ID=pi-b-vit bash setup-wifi-and-kiosk-startup.sh
