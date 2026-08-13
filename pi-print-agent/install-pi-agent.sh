@@ -1110,16 +1110,36 @@ async function processJob(job) {
                     const leftBackIdx = paddedCount - 2 * s - 2;
                     const rightBackIdx = 2 * s + 1;
                     
+                    // The back of the sheet goes down rotated 180°, and the
+                    // positions are offset to match.
+                    //
+                    // lp is told sides=two-sided-short-edge on a landscape A3,
+                    // so the paper turns over about its short edge and the back
+                    // lands upside down relative to the front. Drawing the back
+                    // pages the same way up as the front is what produced the
+                    // long-standing fault where the outer sheet read correctly
+                    // and the inner spread came out inverted.
+                    //
+                    // Rotating by 180° in pdf-lib moves a page's origin to the
+                    // opposite corner, so x/y must be offset by one page width
+                    // and height for it to occupy the same half of the sheet:
+                    // x=a4Width covers the LEFT half, x=a4Width*2 the RIGHT.
+                    //
+                    // Established on the kiosk itself against real paper. Do not
+                    // "simplify" these coordinates without printing a folded
+                    // sheet to check — they are not arbitrary.
                     if (pageArray[leftBackIdx]) {
                         backPage.drawPage(pageArray[leftBackIdx], {
-                            x: 0, y: 0,
-                            width: a4Width, height: a4Height
+                            x: a4Width, y: a4Height,
+                            width: a4Width, height: a4Height,
+                            rotate: degrees(180)
                         });
                     }
                     if (pageArray[rightBackIdx]) {
                         backPage.drawPage(pageArray[rightBackIdx], {
-                            x: a4Width, y: 0,
-                            width: a4Width, height: a4Height
+                            x: a4Width * 2, y: a4Height,
+                            width: a4Width, height: a4Height,
+                            rotate: degrees(180)
                         });
                     }
                 }
