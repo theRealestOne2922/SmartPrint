@@ -1022,7 +1022,26 @@ async function processJob(job) {
     try {
         // 1. Download
         console.log(`[JOB ${job.jobId}] Downloading (${ext})...`);
-        await downloadFile(job.filePath, tempFilePath);
+        // Retry once before giving up on the job.
+        //
+        // The socket occasionally aborts part-way through a download, and the
+        // whole job was failing on that first stumble. It only ever showed up on
+        // large files: a 70KB A4 finishes inside a second and is never exposed,
+        // while the same 4.5MB A3 that downloads in 1-2s dies whenever it needs
+        // a moment longer. That looked like "A3 is broken" for a long time, and
+        // it never was — re-running the identical job printed it immediately.
+        //
+        // A single clean retry costs a second on the rare failure and nothing at
+        // all otherwise. A job that genuinely cannot be fetched still fails on
+        // the second attempt, so nothing is masked.
+        try {
+            await downloadFile(job.filePath, tempFilePath);
+        } catch (dlErr) {
+            console.warn(`[JOB ${job.jobId}] Download failed (${dlErr.message}) — retrying once...`);
+            await new Promise((r) => setTimeout(r, 1500));
+            await downloadFile(job.filePath, tempFilePath);
+            console.log(`[JOB ${job.jobId}] Retry succeeded.`);
+        }
         const dlStat = await fs.stat(tempFilePath);
         console.log(`[JOB ${job.jobId}] Downloaded: ${(dlStat.size / 1024).toFixed(1)} KB`);
 
