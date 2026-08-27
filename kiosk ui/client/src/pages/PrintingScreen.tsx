@@ -32,12 +32,22 @@ export function PrintingScreen() {
     if (jobs && jobs.length > 0) {
       // Check if ALL jobs are done
       const allCompleted = jobs.every(j => j.status === 'completed');
-      // If ALL are either completed or failed, and at least one is failed
-      const isFinished = jobs.every(j => j.status === 'completed' || j.status === 'failed');
+      // 'cancelled' has to count as finished here. This screen used to leave on
+      // all-completed, or all-finished-with-a-failure, and nothing else — so a
+      // cancelled job matched neither condition and the printer animation span
+      // forever with nobody able to get back to the idle screen.
+      const isFinished = jobs.every(j => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled');
       const hasFailed = jobs.some(j => j.status === 'failed');
+      const hasCancelled = jobs.some(j => j.status === 'cancelled');
 
       if (allCompleted) {
         setLocation("/success");
+      } else if (isFinished && hasCancelled) {
+        // A deliberate stop is not a fault, so it does not go to the error
+        // screen. Checked before the failure case: a batch that was cancelled
+        // mid-flight can leave some files 'failed', and the reason the user
+        // cares about is the cancellation they asked for.
+        setLocation("/cancelled");
       } else if (isFinished && hasFailed) {
         // If everything finished but something failed
         setLocation("/error");

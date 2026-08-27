@@ -15,6 +15,7 @@ import { JobConfirmationScreen } from "@/pages/JobConfirmationScreen";
 import { PrintingScreen } from "@/pages/PrintingScreen";
 import { SuccessScreen } from "@/pages/SuccessScreen";
 import { ErrorScreen } from "@/pages/ErrorScreen";
+import { CancelledScreen } from "@/pages/CancelledScreen";
 import NotFound from "@/pages/not-found";
 
 function KioskRouter() {
@@ -27,6 +28,7 @@ function KioskRouter() {
           <Route path="/printing/:printId" component={PrintingScreen} />
           <Route path="/success" component={SuccessScreen} />
           <Route path="/error" component={ErrorScreen} />
+          <Route path="/cancelled" component={CancelledScreen} />
           <Route component={NotFound} />
         </Switch>
       </AnimatedWrapper>

@@ -2,7 +2,7 @@ import { useLocation, useParams } from "wouter";
 import { usePrintJob, useUpdatePrintJobStatus, useUpdatePrintJobDetails, useDeletePrintJobItem, useVerifyFacultyAccess, rememberRelease, forgetRelease } from "@/hooks/use-print-jobs";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageTransition } from "@/components/PageTransition";
-import { FileText, FileSearch, Loader2, ArrowLeft, CheckCircle2, Trash2, Plus, Minus } from "lucide-react";
+import { FileText, FileSearch, Loader2, ArrowLeft, CheckCircle2, Trash2, Plus, Minus, Ban } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export function JobConfirmationScreen() {
@@ -31,6 +31,23 @@ export function JobConfirmationScreen() {
   const [releaseError, setReleaseError] = useState("");
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
 
+  // Seconds between pressing Release and the job actually being sent.
+  //
+  // This delay IS the cancel feature. Once the job is released the Pi claims it
+  // within about a second and prints it — nothing the website can write to the
+  // database will call it back, because only the Pi can talk to CUPS. So the
+  // one place a cancel can be completely reliable is before anything is sent at
+  // all, and that only exists if we hold the job briefly first.
+  //
+  // Deliberately no "print now" button to skip it: staff would learn to hit it
+  // by reflex and the safety window would quietly disappear.
+  const RELEASE_GRACE_SECONDS = 5;
+  const [countdown, setCountdown] = useState<number | null>(null);
+  // executeRelease is defined further down, after the loading guards, so the
+  // countdown effect cannot close over it directly. Held in a ref that is
+  // reassigned each render instead.
+  const releaseRef = useRef<() => void>(() => {});
+
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!scrollRef.current) return;
     setIsPointerDown(true);
@@ -55,16 +72,37 @@ export function JobConfirmationScreen() {
     setTimeout(() => setIsDragging(false), 50);
   };
 
+  // Countdown tick. Fires the real release only when it reaches zero, so
+  // pressing STOP before then leaves the job exactly as it was — no request was
+  // ever made, so there is nothing to undo and nothing to race.
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown <= 0) {
+      setCountdown(null);
+      releaseRef.current();
+      return;
+    }
+    const timer = setTimeout(() => {
+      setCountdown((c) => (c === null ? null : c - 1));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [countdown]);
+
   useEffect(() => {
     if (jobs && jobs.length > 0) {
       const anyCompleted = jobs.some(j => j.status === 'completed');
       const anyPrinting = jobs.some(j => j.status === 'printing' || j.status === 'payment_confirmed');
       const allFailed = jobs.every(j => j.status === 'failed');
+      const anyCancelled = jobs.some(j => j.status === 'cancelled');
 
       if (anyCompleted) {
         setLocation(`/success`);
       } else if (anyPrinting) {
         setLocation(`/printing/${printId}`);
+      } else if (anyCancelled) {
+        // Without this a cancelled job sat on the confirm screen indefinitely:
+        // it is neither completed, nor printing, nor all-failed.
+        setLocation(`/cancelled`);
       } else if (allFailed) {
         setLocation(`/error`);
       } else {
@@ -111,7 +149,14 @@ export function JobConfirmationScreen() {
   const isConfidential = jobs.some(job => job.confidential);
 
   const handleRelease = () => {
-    executeRelease();
+    setReleaseError("");
+    setCountdown(RELEASE_GRACE_SECONDS);
+  };
+
+  const abortRelease = () => {
+    // Nothing was sent, so this is a pure UI reset. The job is still 'uploaded'
+    // and the same print code can simply be released again.
+    setCountdown(null);
   };
 
   const executeRelease = () => {
@@ -139,6 +184,10 @@ export function JobConfirmationScreen() {
       },
     });
   };
+
+  // Keep the ref pointing at the current closure so the countdown effect, which
+  // is declared above the loading guards, can still reach it.
+  releaseRef.current = executeRelease;
 
   const handleAuthSubmit = () => {
     verifyFacultyMutation.mutate({ printId, facultyId: facultyIdInput.trim() }, {
@@ -306,6 +355,32 @@ export function JobConfirmationScreen() {
           </button>
         </div>
       </div>
+
+      {/* Release countdown. Covers the screen so nothing underneath can be
+          pressed while it runs, and so the STOP target is unmissable to someone
+          who has just realised they picked the wrong file. */}
+      {countdown !== null && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-xl p-6">
+          <p className="text-white/80 text-3xl font-medium mb-2">Sending to printer in</p>
+          <p
+            className="text-primary text-[10rem] leading-none font-display font-bold mb-4 tabular-nums"
+            data-testid="release-countdown"
+          >
+            {countdown}
+          </p>
+          <p className="text-white/70 text-xl mb-10 max-w-xl text-center">
+            Wrong file? Stop now — nothing has been sent yet.
+          </p>
+          <button
+            onClick={abortRelease}
+            data-testid="stop-release"
+            className="touch-target rounded-full bg-red-600 text-white text-4xl font-bold px-20 py-8 shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-4"
+          >
+            <Ban className="w-12 h-12" strokeWidth={3} />
+            STOP
+          </button>
+        </div>
+      )}
 
       {/* Confidential Verification Modal */}
       {showAuthModal && (

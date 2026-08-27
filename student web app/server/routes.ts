@@ -2193,16 +2193,25 @@ export async function registerRoutes(
       // agent's existing agentSpooledAt guard means no second sheet actually
       // comes out, but the job looks stuck to everyone who checks it after.
       //
-      // Only this transition is guarded; completed/failed/cancelled keep the
-      // behaviour they have always had. payment_confirmed is accepted because
-      // it is what the kiosk itself still treats as releasable — nothing
-      // writes it any more and no live record carries it, but gating on
-      // "uploaded" alone would strand any that ever did.
+      // payment_confirmed is accepted because it is what the kiosk itself still
+      // treats as releasable — nothing writes it any more and no live record
+      // carries it, but gating on "uploaded" alone would strand any that ever
+      // did.
+      //
+      // Cancelling is guarded for the same reason, from the other end: a job
+      // that already printed must not be flipped to "cancelled" afterwards. The
+      // paper exists, and a record claiming otherwise is worse than no record —
+      // it would tell whoever checks later that nothing came out. Only a job
+      // that has not finished yet can be cancelled.
+      //
+      // completed/failed keep the behaviour they have always had.
       const filter: Record<string, unknown> = { jobId: printId };
       const update: Record<string, unknown> = { status };
       if (status === "printing") {
         filter.status = { $in: ["uploaded", "payment_confirmed"] };
         if (kioskId) update.kioskId = kioskId;
+      } else if (status === "cancelled") {
+        filter.status = { $in: ["uploaded", "payment_confirmed", "printing"] };
       }
 
       const result = await PrintJob.updateMany(filter, update);
@@ -2212,6 +2221,12 @@ export async function registerRoutes(
         // found" would be actively misleading to whoever is standing there.
         if (status === "printing" && (await PrintJob.exists({ jobId: printId }))) {
           return res.status(409).json({ message: "This job has already been released." });
+        }
+        // Same courtesy for a cancel that arrived too late: the job exists, it
+        // has simply already finished. "Not found" would send someone hunting
+        // for a job that is sitting in the output tray.
+        if (status === "cancelled" && (await PrintJob.exists({ jobId: printId }))) {
+          return res.status(409).json({ message: "This job has already finished — it cannot be cancelled." });
         }
         return res.status(404).json({ message: "Print job not found" });
       }
