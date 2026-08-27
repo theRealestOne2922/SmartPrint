@@ -134,7 +134,16 @@ export function useUpdatePrintJobStatus() {
         // has no kiosk identity — that is the single-kiosk behaviour the one
         // existing Pi still runs, and the server treats a missing kioskId as
         // exactly that rather than rejecting it.
-        body: JSON.stringify({ status, releaseToken, ...(kioskId ? { kioskId } : {}) }),
+        // Fall back to the token remembered at faculty verification when the
+        // caller does not pass one. PrintingScreen releases the job now, and it
+        // has no way to hold that token itself — without this a confidential
+        // job would 403 there. It cannot grant access that was not earned: the
+        // map is only populated by a successful verification.
+        body: JSON.stringify({
+          status,
+          releaseToken: releaseToken ?? releaseTokens.get(printId),
+          ...(kioskId ? { kioskId } : {}),
+        }),
       });
 
       if (!res.ok) {
