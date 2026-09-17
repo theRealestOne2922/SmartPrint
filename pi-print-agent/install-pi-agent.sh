@@ -282,6 +282,11 @@ const printJobSchema = new mongoose.Schema({
     // this job must never be retried even if the agent dies before it can write
     // the final status.
     agentSpooledAt: { type: Date, default: null },
+    // The id CUPS assigned when this agent spooled the file ("SmartPrint-42").
+    // It is the only handle that can pull the job back out of the queue, so a
+    // cancel pressed after spooling has something to act on. Must stay
+    // declared here for the same reason as the fields above.
+    cupsJobId: { type: String, default: null },
 }, {
     timestamps: true,
     toJSON: {
@@ -963,6 +968,26 @@ async function claimJob(job) {
     return claimed;
 }
 
+// Pulls one job back out of the CUPS queue. Not the boot-time `cancel -a` —
+// that empties the whole queue and must stay where it is.
+//
+// What this can and cannot do, so nobody over-promises it to the dean: CUPS
+// stops feeding the printer, but the printer buffers a job in its own memory
+// and pages it has already accepted keep coming. On a small job the whole
+// thing may already be past CUPS by the time anyone presses anything. The
+// printer's own stop button remains the only guaranteed halt; this is "stop
+// as much as we still can".
+async function cancelCupsJob(jobId, cupsJobId) {
+    try {
+        await execFileAsync('cancel', [cupsJobId]);
+        console.log(`[JOB ${jobId}] ⛔ Cancelled in CUPS (${cupsJobId}) — pages already in the printer may still come out.`);
+    } catch (err) {
+        // Most often the job had already left the queue, which is not a
+        // fault — there was simply nothing left to stop.
+        console.warn(`[JOB ${jobId}] Could not cancel ${cupsJobId} in CUPS (probably already printed):`, err.message);
+    }
+}
+
 async function processJob(job) {
     // Use MongoDB's _id as the unique key for dedup
     const jobKey = String(job._id || job.id);
@@ -1188,10 +1213,32 @@ async function processJob(job) {
             lpArgs = buildLpArgs(job, { copies, paperSize, printPath, booklet: false });
         }
 
+        // Last look before paper is committed. Everything above worked from
+        // the snapshot taken at claim time, and for a docx that can be minutes
+        // ago — a cancel pressed at the kiosk during conversion has landed in
+        // the database but nothing here has looked since. This is the one
+        // cancel that is free: nothing has reached CUPS, so not sending it is
+        // the whole job. A plain 'exists' rather than a re-read of the record,
+        // because nothing about the job itself is being trusted from it.
+        if (!(await PrintJob.exists({ _id: job._id, status: 'printing' }))) {
+            console.log(`[JOB ${job.jobId}] ⛔ Cancelled before it reached the printer — nothing printed.`);
+            try { await fs.unlink(tempFilePath); } catch {}
+            if (printPath !== tempFilePath) {
+                try { await fs.unlink(printPath); } catch {}
+            }
+            return;
+        }
+
         console.log(`[JOB ${job.jobId}] Printing: lp ${lpArgs.join(' ')}`);
         const { stdout, stderr } = await execFileAsync('lp', lpArgs);
         if (stderr) console.warn(`[PRINTER WARNING]: ${stderr}`);
         console.log(`[JOB ${job.jobId}] Spooled: ${stdout.trim()}`);
+
+        // lp answers "request id is <printer>-<n> (1 file(s))". That id is the
+        // only handle CUPS gives us to pull the job back out of the queue, and
+        // it used to be logged and thrown away. Kept so a cancel pressed after
+        // this point has something to act on.
+        const cupsJobId = (stdout.match(/request id is (\S+)/) || [])[1] || null;
 
         // Record this before anything else can fail. Everything below — the
         // spool wait, the unlinks, the status write — can be interrupted, and
@@ -1199,9 +1246,18 @@ async function processJob(job) {
         // A database blip here must not throw: the paper is already coming out,
         // and falling into the catch would mark a printed job 'failed'.
         try {
-            await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date() } });
+            await PrintJob.updateOne({ _id: job._id }, { $set: { agentSpooledAt: new Date(), cupsJobId } });
         } catch (markErr) {
             console.error(`[JOB ${job.jobId}] Printed, but could not record spool time:`, markErr.message);
+        }
+
+        // A cancel can land in the gap between the check above and the write
+        // just made. The change-stream handler acts on cancels it sees from
+        // here on, because the id is now in the database for it to read; this
+        // one read covers the cancels that arrived before it was. Between the
+        // two, no cancel goes unanswered.
+        if (cupsJobId && (await PrintJob.exists({ _id: job._id, status: 'cancelled' }))) {
+            await cancelCupsJob(job.jobId, cupsJobId);
         }
 
         // Small delay to ensure CUPS spooling has completely finished reading the file
@@ -1213,7 +1269,10 @@ async function processJob(job) {
             try { await fs.unlink(printPath); } catch {}
         }
 
-        await PrintJob.updateOne({ _id: job._id }, { status: 'completed' });
+        // Conditional on still being 'printing': an unconditional write here
+        // landed 'completed' on top of a 'cancelled' and erased the one fact
+        // the person at the kiosk cared about.
+        await PrintJob.updateOne({ _id: job._id, status: 'printing' }, { status: 'completed' });
         console.log(`[JOB ${job.jobId}] ✅ Completed: "${job.fileName}"`);
 
     } catch (error) {
@@ -1222,7 +1281,9 @@ async function processJob(job) {
         if (printPath !== tempFilePath) {
             try { await fs.unlink(printPath); } catch {}
         }
-        await PrintJob.updateOne({ _id: job._id }, { status: 'failed' });
+        // Same guard as the completion write: a download that broke because
+        // the job was cancelled under it is not a failure worth recording.
+        await PrintJob.updateOne({ _id: job._id, status: 'printing' }, { status: 'failed' });
     } finally {
         activeJobs.delete(jobKey);
     }
@@ -1345,7 +1406,10 @@ function startListener() {
     let stream;
     try {
         stream = PrintJob.watch(
-            [{ $match: { 'updateDescription.updatedFields.status': 'printing' } }],
+            // 'cancelled' is in here so the agent hears a cancel at all — the
+            // filter runs on the server, so before this a cancel written by
+            // the kiosk never reached the Pi.
+            [{ $match: { 'updateDescription.updatedFields.status': { $in: ['printing', 'cancelled'] } } }],
             { fullDocument: 'updateLookup' }
         );
     } catch (err) {
@@ -1379,6 +1443,17 @@ function startListener() {
                 }
                 console.log(`[REALTIME] Job ${job.jobId} → printing. Processing...`);
                 processJob(job);
+            } else if (job.status === 'cancelled' && job.kioskId === KIOSK_ID) {
+                // Only the kiosk that spooled it holds the queue this id lives
+                // in. A cancel with no cupsJobId is a job that has not reached
+                // CUPS yet — processJob's pre-spool check handles that one, and
+                // there is nothing in the queue to pull.
+                if (job.cupsJobId) {
+                    console.log(`[REALTIME] Job ${job.jobId} → cancelled. Pulling it from the printer queue...`);
+                    cancelCupsJob(job.jobId, job.cupsJobId);
+                } else {
+                    console.log(`[REALTIME] Job ${job.jobId} → cancelled before spooling. It will not be printed.`);
+                }
             }
         }
     });

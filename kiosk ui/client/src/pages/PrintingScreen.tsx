@@ -88,16 +88,37 @@ export function PrintingScreen() {
     );
   };
 
-  // Nothing has been sent while the countdown is running, so cancelling is just
-  // a matter of not sending it. The job stays 'uploaded' and the same print code
-  // can be entered again.
+  // Two different cancels behind one button, depending on when it is pressed.
+  //
+  // Before the release timer fires, nothing has been sent, so cancelling is
+  // just a matter of not sending it. The job stays 'uploaded' and the same
+  // print code can be entered again. This one is completely reliable.
+  //
+  // After it fires, the job is with the Pi. Writing 'cancelled' is what the
+  // agent listens for: it will not spool a file it has not sent yet, and it
+  // pulls one it has out of the CUPS queue. Pages the printer has already
+  // taken into its own memory still come out — the cancelled screen says so.
   const handleCancel = () => {
-    hasReleased.current = true; // also stops the pending release timer's effect
-    if (releaseTimer.current) clearTimeout(releaseTimer.current);
-    if (ticker.current) clearInterval(ticker.current);
+    if (!hasReleased.current) {
+      hasReleased.current = true; // also stops the pending release timer's effect
+      if (releaseTimer.current) clearTimeout(releaseTimer.current);
+      if (ticker.current) clearInterval(ticker.current);
+      setCancelling(true);
+      setCountdown(null);
+      setLocation("/");
+      return;
+    }
     setCancelling(true);
-    setCountdown(null);
-    setLocation("/");
+    updateStatus.mutate(
+      { printId, status: 'cancelled' },
+      {
+        // A 409 here means the job finished in the moment between the press
+        // and the request, and the poll carries the screen to /success on its
+        // own. Anything else — a dropped request on kiosk wifi — deserves a
+        // second press, so the button comes back.
+        onError: () => setCancelling(false),
+      },
+    );
   };
 
   useEffect(() => {
@@ -187,25 +208,29 @@ export function PrintingScreen() {
         <p className="text-sm text-muted-foreground mb-3">
           {countdown !== null
             ? `Sending to the printer in ${countdown}...`
-            : "Please wait while we prepare your pages..."}
+            : cancelling
+              ? "Stopping the print..."
+              : "Please wait while we prepare your pages..."}
         </p>
         <p className="text-sm font-bold text-primary bg-primary/10 px-6 py-2 rounded-full">
           Do not leave the kiosk
         </p>
 
-        {/* Only shown while the countdown is running, because that is the only
-            time it can actually stop anything. Leaving a Cancel button on screen
-            after the job has gone to the printer would be a button that lies. */}
-        {countdown !== null && (
-          <button
-            onClick={handleCancel}
-            data-testid="cancel-print"
-            className="mt-5 touch-target-small rounded-full bg-secondary text-foreground text-lg font-bold px-8 py-3 hover:bg-gray-200 active:scale-95 transition-all flex items-center justify-center gap-2"
-          >
-            <X className="w-5 h-5" />
-            Cancel
-          </button>
-        )}
+        {/* Stays for the whole print, not just the countdown. It used to
+            vanish once the job was sent, because until the Pi could hear a
+            cancel the button would have been lying after that point. The
+            agent now stops what it still can, so it is honest to leave up.
+            The nav effect above takes the whole screen away the moment the
+            job finishes, so it never outlives the job. */}
+        <button
+          onClick={handleCancel}
+          disabled={cancelling && countdown === null}
+          data-testid="cancel-print"
+          className="mt-5 touch-target-small rounded-full bg-secondary text-foreground text-lg font-bold px-8 py-3 hover:bg-gray-200 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:active:scale-100"
+        >
+          <X className="w-5 h-5" />
+          {cancelling && countdown === null ? "Stopping..." : "Cancel"}
+        </button>
       </div>
     </PageTransition>
   );
