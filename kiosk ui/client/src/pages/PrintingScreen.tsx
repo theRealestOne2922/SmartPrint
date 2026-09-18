@@ -134,19 +134,39 @@ export function PrintingScreen() {
       const hasCancelled = jobs.some(j => j.status === 'cancelled');
 
       if (allCompleted) {
-        setLocation("/success");
+        // A job that finishes 'completed' after Cancel was pressed is a cancel
+        // that lost the race: the Pi found the whole document already inside
+        // the printer and recorded what actually happened. Telling staff
+        // "Success" after they pressed Cancel would be confusing; telling them
+        // "Cancelled" while every page comes out would be a lie.
+        setLocation(cancelling ? "/cancelled?late=1" : "/success");
       } else if (isFinished && hasCancelled) {
         // A deliberate stop is not a fault, so it does not go to the error
         // screen. Checked before the failure case: a batch that was cancelled
         // mid-flight can leave some files 'failed', and the reason the user
         // cares about is the cancellation they asked for.
+        //
+        // Held for a moment when this kiosk pressed the button: the refetch
+        // after the cancel write sees 'cancelled' straight away, but the Pi's
+        // verdict — was there still anything to stop? — arrives a beat later.
+        // If it flips the job to 'completed' in that window, the effect
+        // re-runs, this timer is cleared, and the branch above sends staff to
+        // the honest "too late" screen instead.
+        if (cancelling) {
+          const t = setTimeout(() => setLocation("/cancelled"), 2500);
+          return () => clearTimeout(t);
+        }
         setLocation("/cancelled");
       } else if (isFinished && hasFailed) {
         // If everything finished but something failed
         setLocation("/error");
       }
     }
-  }, [jobs, setLocation]);
+  }, [jobs, setLocation, cancelling]);
+
+  // Every file is inside the printer. Over USB nothing the kiosk sends can
+  // reach it now; only the printer's own Stop button can.
+  const atPrinter = !!jobs && jobs.length > 0 && jobs.every(j => !!j.agentSentAt);
 
   const totalPages = jobs ? jobs.reduce((sum, job) => sum + job.pageCount, 0) : 0;
   const isMultiFile = jobs && jobs.length > 1;
@@ -210,7 +230,9 @@ export function PrintingScreen() {
             ? `Sending to the printer in ${countdown}...`
             : cancelling
               ? "Stopping the print..."
-              : "Please wait while we prepare your pages..."}
+              : atPrinter
+                ? "Printing now — please collect your pages"
+                : "Please wait while we prepare your pages..."}
         </p>
         <p className="text-sm font-bold text-primary bg-primary/10 px-6 py-2 rounded-full">
           Do not leave the kiosk
@@ -222,15 +244,24 @@ export function PrintingScreen() {
             agent now stops what it still can, so it is honest to leave up.
             The nav effect above takes the whole screen away the moment the
             job finishes, so it never outlives the job. */}
-        <button
-          onClick={handleCancel}
-          disabled={cancelling && countdown === null}
-          data-testid="cancel-print"
-          className="mt-5 touch-target-small rounded-full bg-secondary text-foreground text-lg font-bold px-8 py-3 hover:bg-gray-200 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:active:scale-100"
-        >
-          <X className="w-5 h-5" />
-          {cancelling && countdown === null ? "Stopping..." : "Cancel"}
-        </button>
+        {atPrinter && !cancelling ? (
+          // The honest replacement for the button once it can no longer do
+          // anything. The printer's Stop button genuinely works from here.
+          <p className="mt-5 text-base text-muted-foreground max-w-md">
+            The document is already in the printer and can't be stopped from
+            here. To halt it, press <span className="font-bold text-foreground">Stop</span> on the printer itself.
+          </p>
+        ) : (
+          <button
+            onClick={handleCancel}
+            disabled={cancelling && countdown === null}
+            data-testid="cancel-print"
+            className="mt-5 touch-target-small rounded-full bg-secondary text-foreground text-lg font-bold px-8 py-3 hover:bg-gray-200 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:active:scale-100"
+          >
+            <X className="w-5 h-5" />
+            {cancelling && countdown === null ? "Stopping..." : "Cancel"}
+          </button>
+        )}
       </div>
     </PageTransition>
   );

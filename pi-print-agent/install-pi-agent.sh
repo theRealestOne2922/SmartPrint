@@ -287,6 +287,10 @@ const printJobSchema = new mongoose.Schema({
     // cancel pressed after spooling has something to act on. Must stay
     // declared here for the same reason as the fields above.
     cupsJobId: { type: String, default: null },
+    // When CUPS finished handing the whole document to the printer. From this
+    // moment a cancel from the kiosk can no longer stop anything over USB, so
+    // the kiosk hides its Cancel button and points at the printer's own.
+    agentSentAt: { type: Date, default: null },
 }, {
     timestamps: true,
     toJSON: {
@@ -977,14 +981,31 @@ async function claimJob(job) {
 // thing may already be past CUPS by the time anyone presses anything. The
 // printer's own stop button remains the only guaranteed halt; this is "stop
 // as much as we still can".
-async function cancelCupsJob(jobId, cupsJobId) {
+async function cancelCupsJob(jobId, cupsJobId, docId) {
     try {
         await execFileAsync('cancel', [cupsJobId]);
         console.log(`[JOB ${jobId}] ⛔ Cancelled in CUPS (${cupsJobId}) — pages already in the printer may still come out.`);
     } catch (err) {
-        // Most often the job had already left the queue, which is not a
-        // fault — there was simply nothing left to stop.
-        console.warn(`[JOB ${jobId}] Could not cancel ${cupsJobId} in CUPS (probably already printed):`, err.message);
+        if (/already completed/i.test(err.message)) {
+            // The cancel lost the race: CUPS had already handed the whole
+            // document to the printer, and over USB there is no way to call
+            // it back — every page is going to come out. The record has to
+            // say so. Leaving it at 'cancelled' would tell whoever checks
+            // later that fifteen copies of an exam paper were never printed,
+            // when they are sitting in the tray. The kiosk uses agentSentAt to
+            // tell staff the truth as well: "too late", not "cancelled".
+            console.warn(`[JOB ${jobId}] Cancel came too late — the whole document was already in the printer.`);
+            try {
+                await PrintJob.updateOne(
+                    { _id: docId, status: 'cancelled' },
+                    { $set: { status: 'completed', agentSentAt: new Date() } }
+                );
+            } catch (dbErr) {
+                console.error(`[JOB ${jobId}] Could not record the late cancel:`, dbErr.message);
+            }
+        } else {
+            console.warn(`[JOB ${jobId}] Could not cancel ${cupsJobId} in CUPS:`, err.message);
+        }
     }
 }
 
@@ -1029,13 +1050,21 @@ async function waitForCupsToFinish(jobId, cupsJobId, docId) {
         }
         if (!stillQueued) {
             console.log(`[JOB ${jobId}] CUPS finished sending the job after ${Math.round((Date.now() - started) / 1000)}s.`);
+            // The point of no return. The kiosk reads this to take the Cancel
+            // button away and point staff at the printer's own Stop button —
+            // the only thing that can still halt it from here.
+            try {
+                await PrintJob.updateOne({ _id: docId }, { $set: { agentSentAt: new Date() } });
+            } catch {
+                // Not worth failing the job over; the status write below covers it.
+            }
             return;
         }
         if (Date.now() - lastStatusCheck >= 3000) {
             lastStatusCheck = Date.now();
             try {
                 if (await PrintJob.exists({ _id: docId, status: 'cancelled' })) {
-                    await cancelCupsJob(jobId, cupsJobId);
+                    await cancelCupsJob(jobId, cupsJobId, docId);
                     return;
                 }
             } catch {
@@ -1316,7 +1345,7 @@ async function processJob(job) {
         // one read covers the cancels that arrived before it was. Between the
         // two, no cancel goes unanswered.
         if (cupsJobId && (await PrintJob.exists({ _id: job._id, status: 'cancelled' }))) {
-            await cancelCupsJob(job.jobId, cupsJobId);
+            await cancelCupsJob(job.jobId, cupsJobId, job._id);
         }
 
         // Used to be a fixed 2-second sleep, which meant 'completed' was
@@ -1512,7 +1541,7 @@ function startListener() {
                 // there is nothing in the queue to pull.
                 if (job.cupsJobId) {
                     console.log(`[REALTIME] Job ${job.jobId} → cancelled. Pulling it from the printer queue...`);
-                    cancelCupsJob(job.jobId, job.cupsJobId);
+                    cancelCupsJob(job.jobId, job.cupsJobId, job._id);
                 } else {
                     console.log(`[REALTIME] Job ${job.jobId} → cancelled before spooling. It will not be printed.`);
                 }

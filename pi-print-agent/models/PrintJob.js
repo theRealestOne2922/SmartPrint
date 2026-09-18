@@ -44,6 +44,10 @@ const printJobSchema = new mongoose.Schema({
     // cancel pressed after spooling has something to act on. Must stay
     // declared here for the same reason as the fields above.
     cupsJobId: { type: String, default: null },
+    // When CUPS finished handing the whole document to the printer. From this
+    // moment a cancel from the kiosk can no longer stop anything over USB, so
+    // the kiosk hides its Cancel button and points at the printer's own.
+    agentSentAt: { type: Date, default: null },
 }, {
     timestamps: true,
     toJSON: {

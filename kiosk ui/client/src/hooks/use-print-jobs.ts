@@ -69,6 +69,10 @@ function mapJob(d: any) {
     confidential: d.confidential,
     encrypted: d.encrypted,
     createdAt: d.createdAt,
+    // Set by the Pi when CUPS has handed the whole file to the printer. Past
+    // this point a cancel can't stop anything over USB, and the printing
+    // screen says so instead of offering a button that would lie.
+    agentSentAt: d.agentSentAt ?? null,
   };
 }
 
