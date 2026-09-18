@@ -988,6 +988,65 @@ async function cancelCupsJob(jobId, cupsJobId) {
     }
 }
 
+// How long a job may sit in the CUPS queue before the agent stops waiting and
+// records it anyway. Generous: a printer that is out of paper holds the job
+// until someone reloads the tray, and the kiosk staying on "printing" with a
+// working Cancel button is the right state for that. But an agent that waits
+// forever on a queue that never drains is a stuck agent, so there is a cap.
+const CUPS_DRAIN_MAX_MS = 15 * 60 * 1000;
+const CUPS_DRAIN_POLL_MS = 1000;
+
+// Blocks until CUPS reports the job has left its queue — every page rendered
+// and pushed down the USB cable — or the cap above expires.
+//
+// Over USB that is the closest thing to "printed" the Pi can see. The printer
+// buffers the tail of the job in its own memory and gives no paper-out
+// signal, so the last pages can still be coming when this returns. That is a
+// far smaller window than the old fixed 2s, which returned while the Pi was
+// still rendering page 3.
+//
+// It also re-reads the job's status every few seconds. The change stream
+// carries cancels normally, but on campus wifi the stream is down for long
+// stretches, and a cancel pressed during a 30-sheet job should not be lost
+// to that. A DB blip here only delays the loop; nothing is thrown.
+async function waitForCupsToFinish(jobId, cupsJobId, docId) {
+    if (!cupsJobId) {
+        // lp's reply did not parse, so there is nothing to look for in the
+        // queue. Fall back to the old behaviour rather than doing nothing.
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return;
+    }
+    const started = Date.now();
+    let lastStatusCheck = 0;
+    while (Date.now() - started < CUPS_DRAIN_MAX_MS) {
+        let stillQueued = false;
+        try {
+            const { stdout } = await execAsync('lpstat -o 2>/dev/null || true');
+            // lpstat -o lines start with the request id followed by spaces.
+            stillQueued = stdout.split('\n').some(line => line.startsWith(`${cupsJobId} `));
+        } catch {
+            stillQueued = false;
+        }
+        if (!stillQueued) {
+            console.log(`[JOB ${jobId}] CUPS finished sending the job after ${Math.round((Date.now() - started) / 1000)}s.`);
+            return;
+        }
+        if (Date.now() - lastStatusCheck >= 3000) {
+            lastStatusCheck = Date.now();
+            try {
+                if (await PrintJob.exists({ _id: docId, status: 'cancelled' })) {
+                    await cancelCupsJob(jobId, cupsJobId);
+                    return;
+                }
+            } catch {
+                // Database unreachable right now; keep waiting on CUPS.
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, CUPS_DRAIN_POLL_MS));
+    }
+    console.warn(`[JOB ${jobId}] Still in the CUPS queue after ${CUPS_DRAIN_MAX_MS / 60000} minutes — recording it as done and moving on.`);
+}
+
 async function processJob(job) {
     // Use MongoDB's _id as the unique key for dedup
     const jobKey = String(job._id || job.id);
@@ -1260,8 +1319,11 @@ async function processJob(job) {
             await cancelCupsJob(job.jobId, cupsJobId);
         }
 
-        // Small delay to ensure CUPS spooling has completely finished reading the file
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Used to be a fixed 2-second sleep, which meant 'completed' was
+        // written while the printer was on page 2 of 10. The kiosk then showed
+        // "done" — and took the Cancel button with it — with paper still
+        // coming. Now this waits for the job to leave the CUPS queue instead.
+        await waitForCupsToFinish(job.jobId, cupsJobId, job._id);
 
         // 4. Cleanup + mark completed (MongoDB)
         try { await fs.unlink(tempFilePath); } catch {}
@@ -1475,7 +1537,10 @@ function startListener() {
 // status would otherwise sit at 'printing' on the dashboard forever: the claim
 // guard correctly refuses to reprint them, so nothing else would ever move
 // them. The paper already came out, so record what actually happened.
-const SPOOL_SETTLE_MS = 2 * 60 * 1000;
+// Must exceed CUPS_DRAIN_MAX_MS: the agent now stays on 'printing' for as
+// long as CUPS is still feeding the printer, and this sweep — which any agent
+// may run — must not declare a live job finished from underneath it.
+const SPOOL_SETTLE_MS = CUPS_DRAIN_MAX_MS + 5 * 60 * 1000;
 
 // Deliberately NOT scoped to this kiosk, unlike everything else that queries
 // by status. agentSpooledAt is only ever set by the agent that actually handed
