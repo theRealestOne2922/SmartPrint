@@ -54,9 +54,18 @@ const upload = multer({
 // a department because one person is busy. 200 an hour is loose enough for a
 // real exam-week rush and still bounds one address to a few GB, and the storage
 // ceiling below is what actually protects the disk.
+//
+// NOTE ON SHARED CAMPUS ADDRESSES. Every limiter here is keyed by IP, and the
+// whole institution leaves through one NAT address, so each budget below is
+// shared by every member of staff at once rather than granted to each of them.
+// Numbers that look generous per person are severe per campus. The real
+// per-identity protections live on the account itself — the login lockout, the
+// one-minute reissue interval on a code, and the attempt counter that destroys
+// one — and those are unaffected by what an address does. These IP budgets are
+// therefore set to bound a script, not to police people.
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 200,
+  max: 800,
   message: { message: "Too many uploads from this network. Wait a few minutes and try again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -66,7 +75,7 @@ const uploadLimiter = rateLimit({
 // liked. Generous, because a batch upload legitimately creates one job per file.
 const jobCreateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 120,
+  max: 600,
   message: { message: "Too many print jobs from this network. Wait a few minutes and try again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -107,7 +116,7 @@ const verifyFacultyLimiter = rateLimit({
 // kiosk off mid-print.
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 600,
   skipSuccessfulRequests: true,
   message: { message: "Too many requests. Please slow down." },
   standardHeaders: true,
@@ -295,7 +304,7 @@ const FACULTY_LOCKOUT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const statusLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 600,
   message: { message: "Too many status updates. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -305,7 +314,7 @@ const statusLimiter = rateLimit({
 // isn't locked out by their own successful logins, but guessing is throttled.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 200,
   skipSuccessfulRequests: true,
   message: { message: "Too many attempts. Please wait before trying again." },
   standardHeaders: true,
@@ -344,7 +353,7 @@ const registerLimiter = rateLimit({
 // real addresses, each good for one guaranteed send. Counts every attempt.
 const forgotPasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 10,
+  max: 200,
   message: { message: "Too many requests from this network. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -354,7 +363,7 @@ const forgotPasswordLimiter = rateLimit({
 // which codes exist, so every request counts here.
 const codeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: 300,
   message: { message: "Too many requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
