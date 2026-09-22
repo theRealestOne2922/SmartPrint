@@ -6,6 +6,22 @@ import path from "path";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 
+// The file name on disk for a job's filePath. filePath is a full URL and,
+// since download links became signed, carries a "?t=<token>" query — so the
+// last path segment is "abc.pdf?t=…", which matches nothing on disk. That made
+// the orphan sweep below treat every upload as unreferenced and delete it
+// three hours after upload, and any job printed later than that failed with
+// a 404. Parse it as a URL and take the real basename.
+function storedFileName(filePath: string | null | undefined): string | null {
+  if (!filePath) return null;
+  try {
+    return path.basename(new URL(filePath).pathname) || null;
+  } catch {
+    const noQuery = filePath.split("?")[0];
+    return path.basename(noQuery) || null;
+  }
+}
+
 /**
  * Fetches the retention duration from system_settings. Defaults to 24 hours.
  */
@@ -44,8 +60,7 @@ export async function cleanupExpiredJobs(): Promise<void> {
       const pathsToDelete: string[] = [];
       for (const job of expiredJobs) {
         if (!job.filePath) continue;
-        const urlParts = job.filePath.split("/");
-        const fileName = urlParts[urlParts.length - 1];
+        const fileName = storedFileName(job.filePath);
         if (fileName) pathsToDelete.push(path.join(UPLOADS_DIR, fileName));
       }
 
@@ -84,11 +99,7 @@ export async function cleanupExpiredJobs(): Promise<void> {
     const allJobs = await PrintJob.find().select('filePath');
     
     if (storageFiles.length > 0 && allJobs) {
-      const referencedFiles = new Set(allJobs.map((j) => {
-        if (!j.filePath) return null;
-        const parts = j.filePath.split("/");
-        return parts[parts.length - 1];
-      }).filter(Boolean));
+      const referencedFiles = new Set(allJobs.map((j) => storedFileName(j.filePath)).filter(Boolean));
       
       let deletedOrphans = 0;
       const orphanCutoffMs = 3 * 60 * 60 * 1000; // 3 hours grace period for orphans
