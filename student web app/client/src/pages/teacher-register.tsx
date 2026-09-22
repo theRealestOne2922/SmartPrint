@@ -25,6 +25,10 @@ export default function TeacherRegister() {
   // so asking for one here is just friction — mirrors the same setting the
   // print wizard reads to show/hide its confidential toggle.
   const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
+  // Set only when the administrator has switched on showing the signup code
+  // on the page, which happens while email delivery to the institution is
+  // failing. Normally stays null and the code arrives by mail as usual.
+  const [shownCode, setShownCode] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchSettings() {
@@ -74,6 +78,7 @@ export default function TeacherRegister() {
         body: JSON.stringify({ email }),
       });
       const data = await res.json().catch(() => ({}));
+      if (data.otpOnScreen && data.otp) setShownCode(String(data.otp));
       toast({ title: "Sent", description: data.message || "A new code is on its way." });
     } catch {
       toast({ title: "Error", description: "Could not reach the server.", variant: "destructive" });
@@ -101,8 +106,9 @@ export default function TeacherRegister() {
       // accounts wait for an administrator, and a duplicate creates nothing at
       // all. A teacher told "you can now log in" and then refused would read it
       // as the system being broken.
+      if (data.otpOnScreen && data.otp) setShownCode(String(data.otp));
       toast({
-        title: "Check your email",
+        title: data.otpOnScreen ? "Your code is on screen" : "Check your email",
         description: data.message || "Enter the 6-digit code we sent to confirm this address.",
       });
       // Stay on the page and ask for the code, rather than bouncing to a login
@@ -187,11 +193,27 @@ export default function TeacherRegister() {
           <CardContent className="pt-4">
             {awaitingCode ? (
               <form onSubmit={submitCode} className="space-y-4">
-                <p className="text-sm text-zinc-600 leading-relaxed">
-                  A 6-digit code is on its way to{" "}
-                  <span className="font-medium text-zinc-900">{email}</span>. Enter it
-                  below to confirm the address is yours.
-                </p>
+                {shownCode ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-2">
+                    <p className="text-sm text-amber-900 leading-relaxed">
+                      Email delivery to your domain is currently being filtered, so your
+                      code is shown here instead. Enter it below.
+                    </p>
+                    <p className="text-3xl font-bold tracking-[0.35em] text-center text-amber-900 select-all">
+                      {shownCode}
+                    </p>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      It has also been emailed to{" "}
+                      <span className="font-medium">{email}</span> in case that reaches you.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-zinc-600 leading-relaxed">
+                    A 6-digit code is on its way to{" "}
+                    <span className="font-medium text-zinc-900">{email}</span>. Enter it
+                    below to confirm the address is yours.
+                  </p>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="code" className="text-zinc-700 text-sm font-medium">
                     Verification code
