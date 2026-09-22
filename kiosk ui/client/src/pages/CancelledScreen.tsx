@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
 import { motion } from "framer-motion";
 import { Ban } from "lucide-react";
@@ -13,6 +13,10 @@ import { Ban } from "lucide-react";
 // with nobody standing over it.
 export function CancelledScreen() {
   const [, setLocation] = useLocation();
+  // ?late=1 means Cancel was pressed after the whole document had already
+  // reached the printer. Nothing was stopped and every page is coming out;
+  // saying "cancelled" here would send staff away expecting an empty tray.
+  const late = new URLSearchParams(useSearch()).get("late") === "1";
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -35,7 +39,7 @@ export function CancelledScreen() {
         </motion.div>
 
         <h2 className="text-7xl font-display font-bold mb-8">
-          Print Cancelled
+          {late ? "Too Late to Cancel" : "Print Cancelled"}
         </h2>
         {/* Deliberately does not promise the code can be reused: once a job is
             'cancelled' the server only allows 'printing' from 'uploaded', so it
@@ -43,8 +47,9 @@ export function CancelledScreen() {
             printer's own buffer may still push a few sheets out — saying
             otherwise would have staff assume a fault when those appear. */}
         <p className="text-3xl font-medium mb-16 opacity-90 max-w-2xl">
-          This print was stopped. If pages had already started, a few more may
-          still come out of the printer.
+          {late
+            ? "The document had already reached the printer, so it could not be stopped. All pages will come out — press Stop on the printer itself to halt it."
+            : "This print was stopped. If pages had already started, a few more may still come out of the printer."}
         </p>
 
         <div className="w-full max-w-lg h-2 bg-black/20 rounded-full overflow-hidden">
