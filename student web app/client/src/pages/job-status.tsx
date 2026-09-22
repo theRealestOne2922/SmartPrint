@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import { CheckCircle2, Copy, MapPin, Printer, AlertCircle } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
+import { API_BASE } from "@/lib/api-config";
 
 export default function JobStatus() {
   const [, setLocation] = useLocation();
@@ -21,6 +22,28 @@ export default function JobStatus() {
       setLocation("/print");
     }
   }, [setLocation]);
+
+  // While mail to the institution's domain is being filtered the code never
+  // arrives, so the same administrator setting that shows a signup code on the
+  // page also shows the print code here. Defaults to hiding it, which is the
+  // behaviour whenever mail is working.
+  const [showCodeOnScreen, setShowCodeOnScreen] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/settings`);
+        if (!res.ok) return;
+        const settings = await res.json();
+        const row = Array.isArray(settings)
+          ? settings.find((x: any) => x.key === "otpOnScreenEnabled")
+          : null;
+        if (row) setShowCodeOnScreen(String(row.value) === "true");
+      } catch {
+        // Leave it hidden if the setting cannot be read.
+      }
+    })();
+  }, []);
 
   const { data: jobs, isLoading, isError } = usePrintJob(jobId);
   const teacherEmail = typeof window !== 'undefined' ? localStorage.getItem("teacherEmail") : null;
@@ -84,7 +107,7 @@ export default function JobStatus() {
         </p>
 
         {/* Massive ID Card or Email Notice */}
-        {teacherEmail ? (
+        {teacherEmail && !showCodeOnScreen ? (
           <div className="w-full bg-primary/10 border-2 border-primary/20 rounded-[2rem] p-8 text-center relative shadow-soft overflow-hidden mb-8">
             <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 text-primary shadow-sm">
               <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
@@ -98,6 +121,12 @@ export default function JobStatus() {
           <div className="w-full bg-card border-2 border-primary/20 rounded-[2rem] p-8 text-center relative shadow-soft overflow-hidden mb-8">
             <div className="absolute top-0 left-0 w-full h-2 bg-primary" />
             <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">Your Print Code</p>
+            {teacherEmail && (
+              <p className="text-xs text-muted-foreground mb-4 px-4">
+                Shown here because email delivery to your domain is currently being
+                filtered. It has also been sent to <strong>{teacherEmail}</strong>.
+              </p>
+            )}
 
             <div className="flex items-center justify-center gap-4 mb-2">
               <h2 className="text-6xl sm:text-7xl font-display font-bold tracking-widest text-foreground">
