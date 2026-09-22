@@ -76,7 +76,8 @@ export default function AdminDashboard() {
   // above this dashboard's own authority. Defaults true to match the server's
   // default and today's actual behavior, until the real value loads.
   const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
-  const [otpOnScreenEnabled, setOtpOnScreenEnabled] = useState(false);
+  const [signupCodeOnScreen, setSignupCodeOnScreen] = useState(false);
+  const [printCodeOnScreen, setPrintCodeOnScreen] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Password change
@@ -151,8 +152,10 @@ export default function AdminDashboard() {
           if (expiration) setJobExpirationHours(expiration.value);
           if (limit) setMaxFilesLimit(limit.value);
           const conf = settingsData.find((s: any) => s.key === "confidentialPrintingEnabled");
-          const scr = settingsData.find((s: any) => s.key === "otpOnScreenEnabled");
-          if (scr) setOtpOnScreenEnabled(String(scr.value) === "true");
+          const sgn = settingsData.find((s: any) => s.key === "signupCodeOnScreen");
+          if (sgn) setSignupCodeOnScreen(String(sgn.value) === "true");
+          const prc = settingsData.find((s: any) => s.key === "printCodeOnScreen");
+          if (prc) setPrintCodeOnScreen(String(prc.value) === "true");
           // Missing row means enabled — same default the server and the
           // wizard both use, so a database that predates this setting does
           // not silently look like the feature is off.
@@ -198,7 +201,8 @@ export default function AdminDashboard() {
             { key: "jobExpirationHours", value: jobExpirationHours },
             { key: "maxFilesLimit", value: maxFilesLimit },
             { key: "confidentialPrintingEnabled", value: confidentialPrintingEnabled },
-            { key: "otpOnScreenEnabled", value: otpOnScreenEnabled },
+            { key: "signupCodeOnScreen", value: signupCodeOnScreen },
+            { key: "printCodeOnScreen", value: printCodeOnScreen },
           ]
         }),
       });
@@ -871,22 +875,44 @@ export default function AdminDashboard() {
                 {/* Divider */}
                 <div className="border-t border-zinc-200" />
 
-                {/* Signup code delivery */}
+                {/* Print code on the status page */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <Label className="text-zinc-700 text-sm font-medium flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5 text-amber-500" />
-                      Show Signup Code On Screen
+                      Show Print Code On Page
                     </Label>
                     <Switch
-                      checked={otpOnScreenEnabled}
-                      onCheckedChange={setOtpOnScreenEnabled}
+                      checked={printCodeOnScreen}
+                      onCheckedChange={setPrintCodeOnScreen}
                     />
                   </div>
                   <p className="text-xs text-zinc-500 leading-relaxed">
-                    {otpOnScreenEnabled
-                      ? "On — the signup code is shown on the page as well as emailed. Use this only while email delivery is broken: showing the code means the email address is no longer verified, so anyone can register under any address. Your approval of each new account is the only identity check while this is on. Password reset is unaffected and still requires email."
-                      : "Off — the signup code is sent by email only, which is what proves the person registering owns that address. Turn on only if staff are not receiving their codes."}
+                    {printCodeOnScreen
+                      ? "On — after an upload the 6-digit print code is shown on the page as well as emailed. Turn this on while email is not reaching your staff, otherwise they cannot collect anything."
+                      : "Off — the print code is emailed only. If staff report that codes never arrive, turn this on."}
+                  </p>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-zinc-200" />
+
+                {/* Signup verification code */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-zinc-700 text-sm font-medium flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-500" />
+                      Show Signup Verification Code On Page
+                    </Label>
+                    <Switch
+                      checked={signupCodeOnScreen}
+                      onCheckedChange={setSignupCodeOnScreen}
+                    />
+                  </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    {signupCodeOnScreen
+                      ? "On — the code confirming a new account is shown on the signup page. This is the weaker of the two switches: that code is what proves the person owns the address they typed, so while it is on, anyone can register under any address and your approval of each account is the only identity check. Password reset is unaffected and still requires email."
+                      : "Off — a new account must confirm its address by email, which is what proves the address is genuinely theirs. Leave this off unless staff cannot complete signup at all."}
                   </p>
                 </div>
 

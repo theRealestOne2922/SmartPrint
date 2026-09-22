@@ -24,8 +24,8 @@ export default function JobStatus() {
   }, [setLocation]);
 
   // While mail to the institution's domain is being filtered the code never
-  // arrives, so the same administrator setting that shows a signup code on the
-  // page also shows the print code here. Defaults to hiding it, which is the
+  // arrives, so an administrator can have it shown here instead. Its own
+  // setting, separate from the signup code. Defaults to hidden, which is the
   // behaviour whenever mail is working.
   const [showCodeOnScreen, setShowCodeOnScreen] = useState(false);
 
@@ -36,7 +36,7 @@ export default function JobStatus() {
         if (!res.ok) return;
         const settings = await res.json();
         const row = Array.isArray(settings)
-          ? settings.find((x: any) => x.key === "otpOnScreenEnabled")
+          ? settings.find((x: any) => x.key === "printCodeOnScreen")
           : null;
         if (row) setShowCodeOnScreen(String(row.value) === "true");
       } catch {

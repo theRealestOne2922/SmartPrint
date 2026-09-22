@@ -537,7 +537,7 @@ const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
 // Defaults to enabled wherever it is read, so a database that predates this
 // setting — including production right now — behaves exactly as it did
 // before this shipped, with nothing to configure.
-const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled", "otpOnScreenEnabled"]);
+const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled", "signupCodeOnScreen", "printCodeOnScreen"]);
 
 async function confidentialPrintingEnabled(): Promise<boolean> {
   const row = await SystemSetting.findOne({ key: "confidentialPrintingEnabled" }).lean();
@@ -560,8 +560,19 @@ async function confidentialPrintingEnabled(): Promise<boolean> {
 // Defaults to OFF, so a database that predates this setting keeps verifying by
 // mail exactly as before, and the weaker behaviour is never reached by
 // accident — it has to be switched on deliberately.
-async function otpOnScreenEnabled(): Promise<boolean> {
-  const row = await SystemSetting.findOne({ key: "otpOnScreenEnabled" }).lean();
+async function signupCodeOnScreen(): Promise<boolean> {
+  const row = await SystemSetting.findOne({ key: "signupCodeOnScreen" }).lean();
+  return row?.value === "true";
+}
+
+// The companion switch for the print code, read by the job status page
+// through /api/settings. Kept separate from the signup one because the two
+// give away different things: a print code releases one document that its
+// owner is standing next to, whereas a signup code decides whether an email
+// address is proved at all. An administrator will commonly want the print
+// code shown and the signup code not.
+async function printCodeOnScreen(): Promise<boolean> {
+  const row = await SystemSetting.findOne({ key: "printCodeOnScreen" }).lean();
   return row?.value === "true";
 }
 
@@ -1281,7 +1292,7 @@ export async function registerRoutes(
 
       // Still sent by mail as well, so that the moment delivery is working
       // again the flow is the normal one and this simply stops being used.
-      const onScreen = await otpOnScreenEnabled();
+      const onScreen = await signupCodeOnScreen();
       res.status(201).json(onScreen ? { ...accepted, otp, otpOnScreen: true } : accepted);
     } catch (err: any) {
       console.error("Teacher registration error:", err);
@@ -1390,7 +1401,7 @@ export async function registerRoutes(
       });
       const { sendVerificationEmail } = await import('./emailService');
       sendVerificationEmail(teacher.email, teacher.name, otp).catch(() => {});
-      const onScreen = await otpOnScreenEnabled();
+      const onScreen = await signupCodeOnScreen();
       res.json(onScreen ? { ...sent, otp, otpOnScreen: true } : sent);
     } catch (err: any) {
       console.error("Resend verification error:", err);
