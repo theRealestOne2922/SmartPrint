@@ -1554,6 +1554,19 @@ export async function registerRoutes(
           : { success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
+      // An address that never confirmed itself is not an address we have any
+      // reason to believe exists. Registration only checks that the domain is
+      // one we allow, so anything@vit.ac.in is accepted and a record is created
+      // for it; what proves the mailbox is real, and the applicant's, is the
+      // code sent to it and typed back. Until that has happened the account is
+      // inert, and issuing a password reset for it would be issuing one for a
+      // mailbox nobody has shown they can read.
+      if (!teacher.emailVerified) {
+        return res.json(onScreen
+          ? { success: false, notFound: true, message: "That address was never confirmed, so it has no password to reset. Register again and enter the code to confirm it." }
+          : { success: true, message: "If that email is registered, an OTP will be sent." });
+      }
+
       // Five wrong guesses destroy a reset code — but nothing stopped an
       // attacker simply asking for another one. Each fresh code came with a
       // fresh budget, so the real bound was not five guesses, it was five
