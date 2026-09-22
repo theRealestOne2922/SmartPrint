@@ -537,7 +537,7 @@ const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
 // Defaults to enabled wherever it is read, so a database that predates this
 // setting — including production right now — behaves exactly as it did
 // before this shipped, with nothing to configure.
-const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled", "signupCodeOnScreen", "printCodeOnScreen"]);
+const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled", "signupCodeOnScreen", "printCodeOnScreen", "resetCodeOnScreen"]);
 
 async function confidentialPrintingEnabled(): Promise<boolean> {
   const row = await SystemSetting.findOne({ key: "confidentialPrintingEnabled" }).lean();
@@ -571,6 +571,32 @@ async function signupCodeOnScreen(): Promise<boolean> {
 // owner is standing next to, whereas a signup code decides whether an email
 // address is proved at all. An administrator will commonly want the print
 // code shown and the signup code not.
+// The password-reset code, shown on the page instead of emailed.
+//
+// This is by some distance the most dangerous of the three, and it is worth
+// being plain about why. A print code releases one document. A signup code
+// weakens the proof that an address belongs to whoever typed it, and an
+// administrator still has to approve the account afterwards. This one hands
+// whoever asks a working reset for an account that already exists and is
+// already approved — including, if its address is known or guessed, a
+// privileged one. The site is reachable from the public internet, so the
+// person asking need not be on the campus or known to anyone.
+//
+// It exists because mail to the institution is being filtered and staff would
+// otherwise have no way back into their own accounts. It is a stopgap for that
+// outage and nothing else, and it should be switched off the day mail works.
+//
+// While it is on, the endpoint also stops pretending not to know which
+// addresses have accounts: that pretence is already defeated, since a real
+// account yields a code and an unknown one cannot. Saying so plainly is then
+// the honest behaviour, and it is what lets the page tell someone they have
+// mistyped their address instead of leaving them waiting for a code that is
+// never coming.
+async function resetCodeOnScreen(): Promise<boolean> {
+  const row = await SystemSetting.findOne({ key: "resetCodeOnScreen" }).lean();
+  return row?.value === "true";
+}
+
 async function printCodeOnScreen(): Promise<boolean> {
   const row = await SystemSetting.findOne({ key: "printCodeOnScreen" }).lean();
   return row?.value === "true";
@@ -1508,14 +1534,24 @@ export async function registerRoutes(
       // distinct answer here would tell a caller which domains are allowed
       // faster than reading it out of this file, and would do so by touching
       // no database at all, which is a very cheap oracle to hand out.
+      const onScreen = await resetCodeOnScreen();
+
       if (!passwordResetAllowedFor(email)) {
-        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+        return res.json(onScreen
+          ? { success: false, message: "Password reset is not available for that email domain." }
+          : { success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
       const teacher = await Teacher.findOne({ email });
       if (!teacher) {
-        // Return 200 even if not found to prevent email enumeration
-        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+        // Normally a 200 either way, so that the endpoint cannot be used to
+        // discover which addresses have accounts. With the code on screen that
+        // protection is already gone — a real account yields a code and this
+        // one cannot — so the honest answer is the useful one, and it lets
+        // somebody who mistyped their address find out immediately.
+        return res.json(onScreen
+          ? { success: false, notFound: true, message: "No account exists for that email address. Check the spelling, or register first." }
+          : { success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
       // Five wrong guesses destroy a reset code — but nothing stopped an
@@ -1530,7 +1566,9 @@ export async function registerRoutes(
         teacher.resetPasswordExpires &&
         teacher.resetPasswordExpires.getTime() - OTP_TTL_MS > Date.now() - OTP_REISSUE_MIN_INTERVAL_MS
       ) {
-        return res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+        return res.json(onScreen
+          ? { success: false, message: "A code was issued for this account moments ago. Wait a minute before asking for another." }
+          : { success: true, message: "If that email is registered, an OTP will be sent." });
       }
 
       // Generate 6-digit OTP
@@ -1557,7 +1595,9 @@ export async function registerRoutes(
       const { sendPasswordResetEmail } = await import('./emailService');
       await sendPasswordResetEmail(teacher.email, teacher.name, otp);
 
-      res.json({ success: true, message: "If that email is registered, an OTP will be sent." });
+      res.json(onScreen
+        ? { success: true, otp, otpOnScreen: true, message: "Your reset code is shown below. It has also been emailed." }
+        : { success: true, message: "If that email is registered, an OTP will be sent." });
     } catch (err: any) {
       console.error("Forgot password error:", err);
       res.status(500).json({ message: "Internal server error" });

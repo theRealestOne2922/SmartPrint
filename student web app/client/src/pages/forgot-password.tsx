@@ -20,6 +20,9 @@ export default function ForgotPassword() {
   const [step, setStep] = useState<Step>("EMAIL");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
+  // Set only while the administrator has the reset code shown on the page,
+  // which happens while mail to the institution is being filtered.
+  const [shownCode, setShownCode] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -34,13 +37,20 @@ export default function ForgotPassword() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      const data = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.message || "Failed to request OTP");
+        throw new Error(data.message || "Failed to request OTP");
       }
+      // With the code on the page the server answers honestly about whether an
+      // account exists, so a mistyped address stops here instead of sending
+      // somebody to a code screen for a code that will never arrive.
+      if (data.success === false) {
+        throw new Error(data.message || "Could not send a reset code.");
+      }
+      if (data.otpOnScreen && data.otp) setShownCode(String(data.otp));
       toast({
-        title: "Code Sent",
-        description: "If the email exists, an OTP has been sent.",
+        title: data.otpOnScreen ? "Your reset code is on screen" : "Code Sent",
+        description: data.message || "If the email exists, an OTP has been sent.",
       });
       setStep("OTP");
     } catch (err: any) {
@@ -199,6 +209,21 @@ export default function ForgotPassword() {
                   transition={{ duration: 0.3 }}
                   className="space-y-4"
                 >
+                  {shownCode && (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-2">
+                      <p className="text-sm text-amber-900 leading-relaxed">
+                        Email delivery to your domain is currently being filtered, so your
+                        reset code is shown here. Enter it below.
+                      </p>
+                      <p className="text-3xl font-bold tracking-[0.35em] text-center text-amber-900 select-all">
+                        {shownCode}
+                      </p>
+                      <p className="text-xs text-amber-800 leading-relaxed">
+                        It has also been emailed to{" "}
+                        <span className="font-medium">{email}</span> in case that reaches you.
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label htmlFor="otp" className="text-zinc-700 text-sm font-medium">6-Digit Code</Label>
                     <Input

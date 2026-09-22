@@ -78,6 +78,7 @@ export default function AdminDashboard() {
   const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
   const [signupCodeOnScreen, setSignupCodeOnScreen] = useState(false);
   const [printCodeOnScreen, setPrintCodeOnScreen] = useState(false);
+  const [resetCodeOnScreen, setResetCodeOnScreen] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Password change
@@ -156,6 +157,8 @@ export default function AdminDashboard() {
           if (sgn) setSignupCodeOnScreen(String(sgn.value) === "true");
           const prc = settingsData.find((s: any) => s.key === "printCodeOnScreen");
           if (prc) setPrintCodeOnScreen(String(prc.value) === "true");
+          const rst = settingsData.find((s: any) => s.key === "resetCodeOnScreen");
+          if (rst) setResetCodeOnScreen(String(rst.value) === "true");
           // Missing row means enabled — same default the server and the
           // wizard both use, so a database that predates this setting does
           // not silently look like the feature is off.
@@ -203,6 +206,7 @@ export default function AdminDashboard() {
             { key: "confidentialPrintingEnabled", value: confidentialPrintingEnabled },
             { key: "signupCodeOnScreen", value: signupCodeOnScreen },
             { key: "printCodeOnScreen", value: printCodeOnScreen },
+            { key: "resetCodeOnScreen", value: resetCodeOnScreen },
           ]
         }),
       });
@@ -891,6 +895,28 @@ export default function AdminDashboard() {
                     {printCodeOnScreen
                       ? "On — after an upload the 6-digit print code is shown on the page as well as emailed. Turn this on while email is not reaching your staff, otherwise they cannot collect anything."
                       : "Off — the print code is emailed only. If staff report that codes never arrive, turn this on."}
+                  </p>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-zinc-200" />
+
+                {/* Password reset code */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-zinc-700 text-sm font-medium flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-red-500" />
+                      Show Password Reset Code On Page
+                    </Label>
+                    <Switch
+                      checked={resetCodeOnScreen}
+                      onCheckedChange={setResetCodeOnScreen}
+                    />
+                  </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    {resetCodeOnScreen
+                      ? "On — this is the most exposing of the three. Anyone who types a staff address, from anywhere on the internet, is handed a working reset code for that account. Only keep it on while email is not reaching your staff, and turn it off the day it is. While it is on the page also says plainly whether an account exists, since showing the code already reveals that."
+                      : "Off — a reset code is emailed only, so only the owner of the address can use it. The page also stops confirming whether an account exists, so the form cannot be used to discover who is registered."}
                   </p>
                 </div>
 
