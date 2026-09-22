@@ -1,10 +1,31 @@
 // Email Service — Brevo API (reliable, free up to 300/day to any address)
 const brevoApiKey = process.env.BREVO_API_KEY || '';
-const FROM_EMAIL = 'smartprintvit@gmail.com';
-const FROM_NAME = 'SmartPrint VIT';
+
+// The From address must be on a domain we control and have verified in Brevo,
+// with Brevo's SPF and DKIM records published for it.
+//
+// It used to be a gmail.com address, and that is why institutional recipients
+// never received their codes. gmail.com publishes "v=spf1
+// redirect=_spf.google.com", which authorises Google's own ranges and nothing
+// else, so a message sent through Brevo's servers bearing a gmail.com From
+// fails SPF and has no DKIM signature aligned to gmail.com. Consumer Gmail
+// still delivers it, because gmail.com's DMARC policy is p=none — which is
+// exactly why testing against a personal Gmail account showed no problem.
+// Google Workspace tenants apply their own filtering on top, and a gmail.com
+// sender arriving from third-party infrastructure is a textbook forgery
+// signature, so those messages are filed as spam or dropped outright. Every
+// recipient we actually care about is on such a tenant.
+const FROM_EMAIL = process.env.MAIL_FROM_EMAIL || 'smartprintvit@gmail.com';
+const FROM_NAME = process.env.MAIL_FROM_NAME || 'SmartPrint VIT';
 
 if (brevoApiKey) {
-  console.log(`📧 Email service configured (Brevo API)`);
+  console.log(`📧 Email service configured (Brevo API), sending as ${FROM_EMAIL}`);
+  if (/@(gmail|googlemail|yahoo|outlook|hotmail)\.com$/i.test(FROM_EMAIL)) {
+    console.warn(`⚠️  MAIL_FROM_EMAIL is a free-webmail address (${FROM_EMAIL}).`);
+    console.warn('⚠️  Such mail fails SPF and DKIM alignment when sent via Brevo and is');
+    console.warn('⚠️  filtered by Google Workspace and Microsoft 365 recipients. Set');
+    console.warn('⚠️  MAIL_FROM_EMAIL to an address on a domain verified in Brevo.');
+  }
 } else {
   console.warn('⚠️  BREVO_API_KEY not set — email sending disabled');
 }

@@ -76,6 +76,7 @@ export default function AdminDashboard() {
   // above this dashboard's own authority. Defaults true to match the server's
   // default and today's actual behavior, until the real value loads.
   const [confidentialPrintingEnabled, setConfidentialPrintingEnabled] = useState(true);
+  const [otpOnScreenEnabled, setOtpOnScreenEnabled] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Password change
@@ -150,6 +151,8 @@ export default function AdminDashboard() {
           if (expiration) setJobExpirationHours(expiration.value);
           if (limit) setMaxFilesLimit(limit.value);
           const conf = settingsData.find((s: any) => s.key === "confidentialPrintingEnabled");
+          const scr = settingsData.find((s: any) => s.key === "otpOnScreenEnabled");
+          if (scr) setOtpOnScreenEnabled(String(scr.value) === "true");
           // Missing row means enabled — same default the server and the
           // wizard both use, so a database that predates this setting does
           // not silently look like the feature is off.
@@ -195,6 +198,7 @@ export default function AdminDashboard() {
             { key: "jobExpirationHours", value: jobExpirationHours },
             { key: "maxFilesLimit", value: maxFilesLimit },
             { key: "confidentialPrintingEnabled", value: confidentialPrintingEnabled },
+            { key: "otpOnScreenEnabled", value: otpOnScreenEnabled },
           ]
         }),
       });
@@ -861,6 +865,28 @@ export default function AdminDashboard() {
                     {confidentialPrintingEnabled
                       ? "Staff can mark a job confidential — encrypted, released only with the Faculty ID. Turn off to remove that option system-wide."
                       : "Off — no new job can be marked confidential. Encryption, the Faculty ID gate and everything else stay fully built and working; this only stops new jobs from using them. Turn back on any time."}
+                  </p>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-zinc-200" />
+
+                {/* Signup code delivery */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-zinc-700 text-sm font-medium flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-500" />
+                      Show Signup Code On Screen
+                    </Label>
+                    <Switch
+                      checked={otpOnScreenEnabled}
+                      onCheckedChange={setOtpOnScreenEnabled}
+                    />
+                  </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    {otpOnScreenEnabled
+                      ? "On — the signup code is shown on the page as well as emailed. Use this only while email delivery is broken: showing the code means the email address is no longer verified, so anyone can register under any address. Your approval of each new account is the only identity check while this is on. Password reset is unaffected and still requires email."
+                      : "Off — the signup code is sent by email only, which is what proves the person registering owns that address. Turn on only if staff are not receiving their codes."}
                   </p>
                 </div>
 

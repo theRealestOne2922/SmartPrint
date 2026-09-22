@@ -319,11 +319,17 @@ const authLimiter = rateLimit({
 // address that does not exist still counts against the quota, so this is also
 // the thing standing between one script and every real signup for the day
 // getting refused because the quota is gone. Counts every attempt, successes
-// included. Six an hour is generous for someone onboarding a department and
-// tight enough to bound abuse.
+// included.
+//
+// Six an hour was written as though one address meant one person. On a campus
+// it does not: every member of staff leaves through the same NAT address, so
+// the entire institution shared a budget of six and registration stopped
+// working the moment a department tried to sign up together. The cap is kept
+// only as a bound on a runaway script against the mail quota, and is now set
+// far above any plausible rate of genuine signups.
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 6,
+  max: 300,
   message: { message: "Too many accounts created from this network. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -531,11 +537,32 @@ const ALLOWED_SETTINGS: Record<string, { min: number; max: number }> = {
 // Defaults to enabled wherever it is read, so a database that predates this
 // setting — including production right now — behaves exactly as it did
 // before this shipped, with nothing to configure.
-const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled"]);
+const ALLOWED_BOOLEAN_SETTINGS = new Set(["confidentialPrintingEnabled", "otpOnScreenEnabled"]);
 
 async function confidentialPrintingEnabled(): Promise<boolean> {
   const row = await SystemSetting.findOne({ key: "confidentialPrintingEnabled" }).lean();
   return row?.value !== "false";
+}
+
+// Shows the signup code on the page instead of relying on it arriving by mail.
+//
+// This exists because mail to the institution's own domain is currently being
+// filtered, so the code never arrives and nobody can complete a registration.
+// It is a deliberate, temporary trade: the code sent to an address is what
+// proves the person registering actually holds that address, so displaying it
+// on screen means the address is no longer verified at all. Somebody may
+// register under a colleague's address, or one that does not exist.
+//
+// What makes that survivable here, and only here, is that a new account is
+// inert until an administrator approves it: the approval step becomes the sole
+// check on identity while this is on. Turn it off once mail delivery is fixed.
+//
+// Defaults to OFF, so a database that predates this setting keeps verifying by
+// mail exactly as before, and the weaker behaviour is never reached by
+// accident — it has to be switched on deliberately.
+async function otpOnScreenEnabled(): Promise<boolean> {
+  const row = await SystemSetting.findOne({ key: "otpOnScreenEnabled" }).lean();
+  return row?.value === "true";
 }
 
 // Which kiosks are allowed to release a job.
@@ -1252,7 +1279,10 @@ export async function registerRoutes(
         console.error("Verification email failed:", e?.message),
       );
 
-      res.status(201).json(accepted);
+      // Still sent by mail as well, so that the moment delivery is working
+      // again the flow is the normal one and this simply stops being used.
+      const onScreen = await otpOnScreenEnabled();
+      res.status(201).json(onScreen ? { ...accepted, otp, otpOnScreen: true } : accepted);
     } catch (err: any) {
       console.error("Teacher registration error:", err);
       // A field the schema rejects is the caller's mistake, not a server fault.
@@ -1360,7 +1390,8 @@ export async function registerRoutes(
       });
       const { sendVerificationEmail } = await import('./emailService');
       sendVerificationEmail(teacher.email, teacher.name, otp).catch(() => {});
-      res.json(sent);
+      const onScreen = await otpOnScreenEnabled();
+      res.json(onScreen ? { ...sent, otp, otpOnScreen: true } : sent);
     } catch (err: any) {
       console.error("Resend verification error:", err);
       res.status(500).json({ message: "Internal server error" });
