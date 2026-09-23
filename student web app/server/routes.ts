@@ -1295,36 +1295,54 @@ export async function registerRoutes(
         message: "Check that inbox for a 6-digit code to confirm the address is yours.",
       };
 
-      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] })
+      // Looked up separately rather than with one $or. A record matching on
+      // Employee ID but carrying a different address belongs to somebody else,
+      // and treating it as "their" account would reissue a code for a stranger's
+      // address and report it back as though it were theirs.
+      const byEmail = await Teacher.findOne({ email })
         .select("_id email emailVerified")
         .lean();
-      if (existing) {
+      const byEmpId = byEmail ? null : await Teacher.findOne({ empId }).select("_id").lean();
+
+      if (byEmail || byEmpId) {
         // Spend roughly what the real path spends, so the reply time does not
         // become the oracle the message no longer is.
-        await hashPassword(password);
+        const rehashed = await hashPassword(password);
 
         // With the code shown on the page this branch was a dead end. It
-        // answers as though a code had been sent, but issues none, so somebody
-        // re-registering an address they had already used sat on the confirm
+        // answered as though a code had been sent but issued none, so somebody
+        // re-registering an address they had used before sat on the confirm
         // screen waiting for a code that was never going to come. The pretence
-        // is pointless here in any case: the page shows real codes, so it
+        // is pointless in that mode anyway: the page shows real codes, so it
         // already reveals which addresses exist.
-        //
-        // An address that exists but was never confirmed is exactly the case
-        // worth rescuing, so issue a fresh code for it and show that. An
-        // address that is already confirmed is told to sign in instead.
         if (await signupCodeOnScreen()) {
-          if (existing.emailVerified) {
+          if (byEmpId) {
             return res.status(200).json({
               success: false,
-              message: "An account already exists for that email or Employee ID. Sign in instead, or use Forgot Password.",
+              message: "That Employee ID is already registered to a different email address. Check the ID, or sign in with the address you used before.",
             });
           }
+          if (byEmail!.emailVerified) {
+            return res.status(200).json({
+              success: false,
+              message: "An account already exists for that email address and has been confirmed. Sign in instead, or use Forgot Password.",
+            });
+          }
+
+          // Never confirmed, so nobody has yet proved they hold this address
+          // and no sign-in has ever depended on the password sitting on it.
+          // Somebody re-registering has just chosen a password and expects to
+          // use it; leaving the old one in place would confirm their address
+          // and then refuse their password, which is the same dead end in a
+          // different place. The code still has to be entered before any of it
+          // counts.
           const reissue = crypto.randomInt(100000, 1000000).toString();
           await Teacher.updateOne(
-            { _id: existing._id },
+            { _id: byEmail!._id },
             {
               $set: {
+                name,
+                password: rehashed,
                 emailOtp: hashOtp(reissue),
                 emailOtpExpires: new Date(Date.now() + OTP_TTL_MS),
                 emailOtpAttempts: 0,
@@ -1332,12 +1350,12 @@ export async function registerRoutes(
             },
           );
           const { sendVerificationEmail } = await import('./emailService');
-          sendVerificationEmail(existing.email, name, reissue).catch(() => {});
+          sendVerificationEmail(byEmail!.email, name, reissue).catch(() => {});
           return res.status(201).json({
             ...accepted,
             otp: reissue,
             otpOnScreen: true,
-            message: "That address was already registered but never confirmed. Here is a fresh code.",
+            message: "That address was registered before but never confirmed. Here is a fresh code, and the password you just chose now applies.",
           });
         }
 
