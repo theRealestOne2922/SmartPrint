@@ -1,6 +1,24 @@
 // Email Service — Brevo API (reliable, free up to 300/day to any address)
 const brevoApiKey = process.env.BREVO_API_KEY || '';
 
+// Gmail's own SMTP, used in preference to Brevo when credentials are present.
+//
+// The delivery problem was never the gmail.com address as such, it was sending
+// that address from somebody else's servers: gmail.com authorises Google's
+// ranges and no others, so a message bearing a gmail.com From and leaving
+// Brevo fails SPF and carries no DKIM signature aligned to gmail.com. Sent
+// through smtp.gmail.com the same message passes both, and because the
+// recipients here are on Google Workspace it is then Google delivering to
+// Google.
+//
+// GMAIL_APP_PASSWORD must be an App Password, not the account password.
+// Google refuses account passwords on SMTP outright — the WebLoginRequired
+// error — and an App Password can only be generated once 2-Step Verification
+// is enabled on the account.
+const gmailUser = (process.env.GMAIL_USER || '').trim();
+const gmailAppPassword = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
+const smtpEnabled = !!(gmailUser && gmailAppPassword);
+
 // The From address must be on a domain we control and have verified in Brevo,
 // with Brevo's SPF and DKIM records published for it.
 //
@@ -18,7 +36,9 @@ const brevoApiKey = process.env.BREVO_API_KEY || '';
 const FROM_EMAIL = process.env.MAIL_FROM_EMAIL || 'smartprintvit@gmail.com';
 const FROM_NAME = process.env.MAIL_FROM_NAME || 'SmartPrint VIT';
 
-if (brevoApiKey) {
+if (smtpEnabled) {
+  console.log(`📧 Email service configured (Gmail SMTP), sending as ${gmailUser}`);
+} else if (brevoApiKey) {
   console.log(`📧 Email service configured (Brevo API), sending as ${FROM_EMAIL}`);
   if (/@(gmail|googlemail|yahoo|outlook|hotmail)\.com$/i.test(FROM_EMAIL)) {
     console.warn(`⚠️  MAIL_FROM_EMAIL is a free-webmail address (${FROM_EMAIL}).`);
@@ -45,7 +65,41 @@ function esc(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+// Created once, on first use, so that a deployment without SMTP credentials
+// neither builds a transport nor pays for the module.
+let transporter: any = null;
+async function getTransporter() {
+  if (transporter) return transporter;
+  const nodemailer = await import('nodemailer');
+  transporter = (nodemailer as any).default.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,          // STARTTLS on 587
+    auth: { user: gmailUser, pass: gmailAppPassword },
+  });
+  return transporter;
+}
+
+async function sendGmailEmail(to: string, subject: string, htmlContent: string): Promise<boolean> {
+  try {
+    const t = await getTransporter();
+    await t.sendMail({ from: `"${FROM_NAME}" <${gmailUser}>`, to, subject, html: htmlContent });
+    return true;
+  } catch (e: any) {
+    console.error(`📧 Gmail SMTP error sending to ${to}:`, e?.message);
+    return false;
+  }
+}
+
+// Gmail first where it is configured, Brevo otherwise. Where both exist Gmail
+// is tried first and Brevo is the fallback, so a transient SMTP failure does
+// not cost the message.
 async function sendBrevoEmail(to: string, subject: string, htmlContent: string): Promise<boolean> {
+  if (smtpEnabled) {
+    if (await sendGmailEmail(to, subject, htmlContent)) return true;
+    if (!brevoApiKey) return false;
+    console.warn(`📧 Falling back to Brevo for ${to}`);
+  }
   if (!brevoApiKey) return false;
 
   try {
@@ -83,7 +137,7 @@ export async function sendOtpEmail(
   jobId: string,
   fileName: string,
 ): Promise<boolean> {
-  if (!brevoApiKey) {
+  if (!brevoApiKey && !smtpEnabled) {
     console.warn('Email not configured — skipping OTP email');
     return false;
   }
@@ -134,7 +188,7 @@ export async function sendPasswordResetEmail(
   teacherName: string,
   otp: string,
 ): Promise<boolean> {
-  if (!brevoApiKey) {
+  if (!brevoApiKey && !smtpEnabled) {
     console.warn('Email not configured — skipping password reset email');
     return false;
   }
@@ -184,7 +238,7 @@ export async function sendVerificationEmail(
   teacherName: string,
   otp: string,
 ): Promise<boolean> {
-  if (!brevoApiKey) {
+  if (!brevoApiKey && !smtpEnabled) {
     console.warn('Email not configured — skipping verification email');
     return false;
   }
