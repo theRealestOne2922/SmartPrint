@@ -106,6 +106,11 @@ export default function TeacherRegister() {
       // accounts wait for an administrator, and a duplicate creates nothing at
       // all. A teacher told "you can now log in" and then refused would read it
       // as the system being broken.
+      // The server says so plainly when an address is already registered and
+      // confirmed; no code is coming, so there is no confirm step to move to.
+      if (data.success === false) {
+        throw new Error(data.message || "Could not create that account.");
+      }
       if (data.otpOnScreen && data.otp) setShownCode(String(data.otp));
       toast({
         title: data.otpOnScreen ? "Your code is on screen" : "Check your email",

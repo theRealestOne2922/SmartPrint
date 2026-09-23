@@ -1295,11 +1295,52 @@ export async function registerRoutes(
         message: "Check that inbox for a 6-digit code to confirm the address is yours.",
       };
 
-      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] }).select("_id").lean();
+      const existing = await Teacher.findOne({ $or: [{ email }, { empId }] })
+        .select("_id email emailVerified")
+        .lean();
       if (existing) {
         // Spend roughly what the real path spends, so the reply time does not
         // become the oracle the message no longer is.
         await hashPassword(password);
+
+        // With the code shown on the page this branch was a dead end. It
+        // answers as though a code had been sent, but issues none, so somebody
+        // re-registering an address they had already used sat on the confirm
+        // screen waiting for a code that was never going to come. The pretence
+        // is pointless here in any case: the page shows real codes, so it
+        // already reveals which addresses exist.
+        //
+        // An address that exists but was never confirmed is exactly the case
+        // worth rescuing, so issue a fresh code for it and show that. An
+        // address that is already confirmed is told to sign in instead.
+        if (await signupCodeOnScreen()) {
+          if (existing.emailVerified) {
+            return res.status(200).json({
+              success: false,
+              message: "An account already exists for that email or Employee ID. Sign in instead, or use Forgot Password.",
+            });
+          }
+          const reissue = crypto.randomInt(100000, 1000000).toString();
+          await Teacher.updateOne(
+            { _id: existing._id },
+            {
+              $set: {
+                emailOtp: hashOtp(reissue),
+                emailOtpExpires: new Date(Date.now() + OTP_TTL_MS),
+                emailOtpAttempts: 0,
+              },
+            },
+          );
+          const { sendVerificationEmail } = await import('./emailService');
+          sendVerificationEmail(existing.email, name, reissue).catch(() => {});
+          return res.status(201).json({
+            ...accepted,
+            otp: reissue,
+            otpOnScreen: true,
+            message: "That address was already registered but never confirmed. Here is a fresh code.",
+          });
+        }
+
         return res.status(201).json(accepted);
       }
 
